@@ -2,8 +2,8 @@
  * Copyright(c) 2024 Hewlett Packard Enterprise Development LP
  */
 
-#include <rte_ethdev_driver.h>
-#include <rte_ethdev_pci.h>
+#include <ethdev_driver.h>
+#include <ethdev_pci.h>
 #include <rte_pci.h>
 #include <rte_malloc.h>
 #include <rte_memzone.h>
