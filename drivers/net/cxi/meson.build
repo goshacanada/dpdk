@@ -18,21 +18,55 @@ headers = files(
     'cxi_hw.h',
 )
 
-# Include CXI hardware headers from the system
+# Add DPDK build directory to include path to find rte_build_config.h
+includes += include_directories('../../..', global_inc_dir)
+
+# Check for system CXI headers
+cxi_headers_found = false
+cassini_headers_found = false
+
+# Try pkg-config first
 cxi_headers_dep = dependency('cxi-headers', required: false)
-if not cxi_headers_dep.found()
-    # Fallback to local headers if available
+cassini_headers_dep = dependency('cray-cassini-headers', required: false)
+
+if cxi_headers_dep.found() and cassini_headers_dep.found()
+    cxi_headers_found = true
+    cassini_headers_found = true
+    deps += [cxi_headers_dep, cassini_headers_dep]
+else
+    # Try user-specified path
     cxi_inc_dir = get_option('cxi_headers_path')
     if cxi_inc_dir != ''
-        cxi_headers_dep = declare_dependency(include_directories: include_directories(cxi_inc_dir))
+        if fs.is_dir(cxi_inc_dir)
+            includes += include_directories(cxi_inc_dir)
+            cxi_headers_found = true
+            cassini_headers_found = true
+        endif
     else
-        build = false
-        reason = 'missing cxi headers dependency'
-        subdir_done()
+        # Try standard locations
+        cxi_inc_dirs = [
+            '/usr/include/cxi',
+            '/usr/local/include/cxi',
+            '/usr/include',
+            '/usr/local/include',
+        ]
+        
+        foreach inc_dir : cxi_inc_dirs
+            if fs.is_dir(inc_dir)
+                includes += include_directories(inc_dir)
+                cxi_headers_found = true
+                cassini_headers_found = true
+                break
+            endif
+        endforeach
     endif
 endif
 
-deps += [cxi_headers_dep]
+if not cxi_headers_found or not cassini_headers_found
+    build = false
+    reason = 'missing CXI or Cassini headers'
+    subdir_done()
+endif
 
 # External dependencies
 libcxi_dep = dependency('libcxi', required: false)
@@ -50,20 +84,3 @@ ext_deps += libcxi_dep
 
 # Additional dependencies for CXI hardware interface
 deps += ['pci', 'mempool']
-
-# Add meson option for cxi headers path
-if get_option('cxi_headers_path') == ''
-    # Try to find headers in standard locations
-    cxi_inc_dirs = [
-        '/usr/include/cxi',
-        '/usr/local/include/cxi',
-        '../../../include',  # Relative to this directory
-    ]
-    
-    foreach inc_dir : cxi_inc_dirs
-        if fs.is_dir(inc_dir)
-            cxi_headers_dep = declare_dependency(include_directories: include_directories(inc_dir))
-            break
-        endif
-    endforeach
-endif
