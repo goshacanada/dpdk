@@ -7,9 +7,17 @@
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
 #include <rte_prefetch.h>
+#include <rte_atomic.h>
 
 #include "cxi_ethdev.h"
 #include "cxi_hw.h"
+
+/* Constants from cxi_udp_gen.c */
+#define CXI_IDC_MAX_SIZE        C_MAX_IDC_PAYLOAD_RES
+#define CXI_PKT_FORMAT_STD      C_PKT_FORMAT_STD
+#define CXI_CSUM_NONE          C_CHECKSUM_CTRL_NONE
+#define CXI_CSUM_TCP           C_CHECKSUM_CTRL_TCP
+#define CXI_CSUM_UDP           C_CHECKSUM_CTRL_UDP
 
 /* RX queue setup */
 int
@@ -142,6 +150,10 @@ cxi_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
     txq->offloads = tx_conf->offloads;
     txq->force_dma_interval = nb_desc / 8; /* Force DMA every 1/8 of queue */
     txq->force_dma_count = txq->force_dma_interval;
+
+    /* Initialize credits - following cxi_udp_gen.c pattern */
+    rte_atomic32_init(&txq->tx_credits);
+    rte_atomic32_set(&txq->tx_credits, nb_desc);
 
     /* Allocate TX buffer array */
     txq->tx_bufs = rte_zmalloc_socket("cxi_tx_bufs",
@@ -333,12 +345,25 @@ cxi_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
     uint16_t nb_tx = 0;
     int ret;
 
+    /* Process completions first to free up credits */
+    cxi_hw_tx_process_events(adapter, txq);
+
     for (uint16_t i = 0; i < nb_pkts; i++) {
         struct rte_mbuf *mbuf = tx_pkts[i];
 
         /* Prefetch next mbuf */
         if (i + 1 < nb_pkts)
             rte_prefetch0(tx_pkts[i + 1]);
+
+        /* Check if we have credits available */
+        if (rte_atomic32_read(&txq->tx_credits) == 0) {
+            /* Try to process more completions */
+            cxi_hw_tx_process_events(adapter, txq);
+            if (rte_atomic32_read(&txq->tx_credits) == 0) {
+                /* Still no credits, stop transmitting */
+                break;
+            }
+        }
 
         /* Decide between IDC and DMA based on packet size and fragmentation */
         if (cxi_should_use_idc(txq, mbuf)) {
@@ -350,13 +375,11 @@ cxi_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
         if (ret) {
             /* Failed to transmit */
-            txq->tx_errors++;
+            if (ret != -EAGAIN) {
+                txq->tx_errors++;
+            }
             break;
         }
-
-        /* Store mbuf for completion processing */
-        txq->tx_bufs[txq->tx_tail] = mbuf;
-        txq->tx_tail = (txq->tx_tail + 1) % txq->nb_desc;
 
         /* Update statistics */
         txq->tx_packets++;
@@ -383,14 +406,23 @@ cxi_hw_tx_idc(struct cxi_adapter *adapter,
 
     PMD_DRV_LOG(DEBUG, "Transmitting packet via IDC, len: %u", mbuf->pkt_len);
 
-    /* Set up IDC ethernet command */
-    idc_cmd.fmt = CXI_PKT_FORMAT_STD;
+    /* Check if we have credits available */
+    if (rte_atomic32_read(&txq->tx_credits) == 0) {
+        PMD_DRV_LOG(DEBUG, "No TX credits available");
+        return -EAGAIN;
+    }
+
+    /* Set up IDC ethernet command - following cxi_udp_gen.c pattern */
+    idc_cmd.fmt = C_PKT_FORMAT_STD;
     idc_cmd.length = sizeof(struct c_idc_eth_cmd) + mbuf->pkt_len;
-    idc_cmd.checksum_ctrl = CXI_CSUM_NONE;
+    idc_cmd.flow_hash = txq->queue_id;     /* Use queue ID as flow hash */
+    idc_cmd.checksum_ctrl = C_CHECKSUM_CTRL_NONE;
+    idc_cmd.eq = txq->eq.eqn;
+    idc_cmd.user_ptr = (uintptr_t)mbuf;    /* Store mbuf for completion */
 
     /* Handle checksum offload */
     if (mbuf->ol_flags & RTE_MBUF_F_TX_IP_CKSUM) {
-        idc_cmd.checksum_ctrl = CXI_CSUM_TCP; /* Simplified */
+        idc_cmd.checksum_ctrl = C_CHECKSUM_CTRL_UDP;
         idc_cmd.checksum_start = mbuf->l2_len / 2;
         idc_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
                                   offsetof(struct rte_tcp_hdr, cksum)) / 2;
@@ -411,6 +443,9 @@ cxi_hw_tx_idc(struct cxi_adapter *adapter,
         return ret;
     }
 
+    /* Consume a credit */
+    rte_atomic32_dec(&txq->tx_credits);
+
     return 0;
 }
 
@@ -428,25 +463,35 @@ cxi_hw_tx_dma(struct cxi_adapter *adapter,
     PMD_DRV_LOG(DEBUG, "Transmitting packet via DMA, len: %u, segs: %u",
                 mbuf->pkt_len, mbuf->nb_segs);
 
-    /* Set up DMA ethernet command */
-    dma_cmd.fmt = CXI_PKT_FORMAT_STD;
-    dma_cmd.checksum_ctrl = CXI_CSUM_NONE;
-    dma_cmd.total_len = mbuf->pkt_len;
-    dma_cmd.user_ptr = (uintptr_t)mbuf;
+    /* Check if we have credits available */
+    if (rte_atomic32_read(&txq->tx_credits) == 0) {
+        PMD_DRV_LOG(DEBUG, "No TX credits available");
+        return -EAGAIN;
+    }
+
+    /* Set up DMA ethernet command - following cxi_udp_gen.c pattern */
+    dma_cmd.read_lac = adapter->phys_lac;  /* Critical: LAC for memory access */
+    dma_cmd.fmt = C_PKT_FORMAT_STD;
+    dma_cmd.flow_hash = txq->queue_id;     /* Use queue ID as flow hash */
+    dma_cmd.checksum_ctrl = C_CHECKSUM_CTRL_NONE;
     dma_cmd.eq = txq->eq.eqn;
+    dma_cmd.total_len = mbuf->pkt_len;
+    dma_cmd.user_ptr = (uintptr_t)mbuf;    /* Store mbuf for completion */
 
     /* Handle checksum offload */
     if (mbuf->ol_flags & RTE_MBUF_F_TX_IP_CKSUM) {
-        dma_cmd.checksum_ctrl = CXI_CSUM_TCP; /* Simplified */
+        dma_cmd.checksum_ctrl = C_CHECKSUM_CTRL_UDP;
         dma_cmd.checksum_start = mbuf->l2_len / 2;
         dma_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
                                   offsetof(struct rte_tcp_hdr, cksum)) / 2;
     }
 
-    /* Build scatter-gather list */
+    /* Build scatter-gather list using mapped IOVA addresses */
     seg = mbuf;
     while (seg && seg_count < 7) { /* CXI supports up to 7 segments */
-        dma_cmd.addr[seg_count] = rte_mbuf_data_iova(seg);
+        /* Use CXI_VA_TO_IOVA macro like cxi_udp_gen.c */
+        dma_cmd.addr[seg_count] = CXI_VA_TO_IOVA(adapter->tx_md,
+                                                rte_pktmbuf_mtod(seg, void *));
         dma_cmd.len[seg_count] = seg->data_len;
         seg_count++;
         seg = seg->next;
@@ -472,7 +517,70 @@ cxi_hw_tx_dma(struct cxi_adapter *adapter,
         return ret;
     }
 
+    /* Consume a credit */
+    rte_atomic32_dec(&txq->tx_credits);
+
     return 0;
+}
+
+/* Process TX completion events - following cxi_udp_gen.c pattern */
+uint16_t
+cxi_hw_tx_process_events(struct cxi_adapter *adapter,
+                         struct cxi_tx_queue *txq)
+{
+    const union c_event *event;
+    uint16_t completed = 0;
+    int event_count = 0;
+
+    if (!txq->eq.eq) {
+        return 0;
+    }
+
+    /* Process completion events */
+    while ((event = cxi_eq_get_event(txq->eq.eq))) {
+        struct rte_mbuf *mbuf;
+
+        /* Validate event */
+        if (event->hdr.event_size != C_EVENT_SIZE_16_BYTE) {
+            PMD_DRV_LOG(ERR, "Unexpected event size: %u", event->hdr.event_size);
+            break;
+        }
+
+        if (event->hdr.event_type != C_EVENT_SEND) {
+            PMD_DRV_LOG(ERR, "Unexpected event type: %u", event->hdr.event_type);
+            break;
+        }
+
+        if (event->init_short.return_code != C_RC_OK) {
+            PMD_DRV_LOG(ERR, "TX completion error: %u",
+                        event->init_short.return_code);
+            txq->tx_errors++;
+        }
+
+        /* Retrieve mbuf from user_ptr */
+        mbuf = (struct rte_mbuf *)event->init_short.user_ptr;
+        if (mbuf) {
+            /* Free the transmitted mbuf */
+            rte_pktmbuf_free(mbuf);
+            completed++;
+        }
+
+        /* Return a credit - following cxi_udp_gen.c pattern */
+        rte_atomic32_inc(&txq->tx_credits);
+
+        /* Limit event processing per call */
+        event_count++;
+        if (event_count >= 16) {
+            break;
+        }
+    }
+
+    /* Acknowledge processed events */
+    if (event_count > 0) {
+        cxi_eq_ack_events(txq->eq.eq);
+    }
+
+    return completed;
 }
 
 /* Hardware-specific RX buffer setup */

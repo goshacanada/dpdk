@@ -140,7 +140,7 @@ int cxi_hw_get_stats(struct cxi_adapter *adapter,
                      struct cxi_hw_stats *stats);
 void cxi_hw_clear_stats(struct cxi_adapter *adapter);
 
-/* MAC address management */
+/* MAC address management - uses libcxi */
 int cxi_hw_get_mac_addr(struct cxi_adapter *adapter,
                         struct rte_ether_addr *mac_addr);
 int cxi_hw_set_mac_addr(struct cxi_adapter *adapter,
@@ -152,11 +152,11 @@ int cxi_hw_get_link_info(struct cxi_adapter *adapter,
 int cxi_hw_set_link_up(struct cxi_adapter *adapter);
 int cxi_hw_set_link_down(struct cxi_adapter *adapter);
 
-/* Promiscuous mode */
+/* Promiscuous mode - uses libcxi */
 int cxi_hw_set_promiscuous(struct cxi_adapter *adapter, bool enable);
 int cxi_hw_set_allmulticast(struct cxi_adapter *adapter, bool enable);
 
-/* MTU management */
+/* MTU management - uses libcxi */
 int cxi_hw_set_mtu(struct cxi_adapter *adapter, uint16_t mtu);
 
 /* Interrupt management */

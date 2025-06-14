@@ -130,6 +130,9 @@ struct cxi_tx_queue {
     /* IDC vs DMA decision tracking */
     uint32_t force_dma_count;
     uint32_t force_dma_interval;
+
+    /* Credit management - following cxi_udp_gen.c pattern */
+    rte_atomic32_t tx_credits;
 };
 
 /* Device hardware information */
@@ -158,6 +161,11 @@ struct cxi_adapter {
     /* CXI device context - libcxi handles */
     struct cxil_dev *cxil_dev;  /* libcxi device handle */
     struct cxil_lni *lni;       /* Logical Network Interface */
+    struct cxi_cp *cp;          /* Communication Profile */
+
+    /* Memory mapping - following cxi_udp_gen.c pattern */
+    struct cxi_md *tx_md;       /* TX memory descriptor for LAC */
+    uint32_t phys_lac;          /* Physical LAC for DMA operations */
     
     /* Queues */
     struct cxi_rx_queue **rx_queues;
@@ -220,6 +228,14 @@ uint16_t cxi_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
                        uint16_t nb_pkts);
 uint16_t cxi_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
                        uint16_t nb_pkts);
+
+/* Hardware TX/RX functions */
+int cxi_hw_tx_idc(struct cxi_adapter *adapter, struct cxi_tx_queue *txq,
+                  struct rte_mbuf *mbuf);
+int cxi_hw_tx_dma(struct cxi_adapter *adapter, struct cxi_tx_queue *txq,
+                  struct rte_mbuf *mbuf);
+uint16_t cxi_hw_tx_process_events(struct cxi_adapter *adapter,
+                                  struct cxi_tx_queue *txq);
 
 /* Hardware interface */
 int cxi_hw_init(struct cxi_adapter *adapter);
