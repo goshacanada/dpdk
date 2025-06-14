@@ -28,11 +28,32 @@ The Cassini NIC consists of several key hardware blocks:
 - **ATU (Address Translation Unit)**: Memory mapping
 - **EE (Event Engine)**: Event/completion handling
 
+## Architecture Documentation
+
+Comprehensive architecture documentation is available in this directory:
+
+- **`CXI_PMD_Architecture.md`** - Detailed architecture documentation with PlantUML diagrams
+- **`cxi_pmd_architecture.puml`** - Raw PlantUML source files for architecture diagrams
+
+The documentation includes:
+1. **Complete Call Flow Sequence Diagram** - Function calls from DPDK app through PMD, libcxi, kernel driver, to hardware
+2. **Component Architecture Diagram** - Modular design and component relationships
+3. **Data Flow Diagram** - Packet processing flow and zero-copy design
+
+### Key Architectural Features
+
+- **Zero-Copy Design**: Direct hardware access via memory mapping, no data copying
+- **Dual Transmission Paths**: IDC for small packets, DMA for large packets
+- **Credit-Based Flow Control**: Prevents queue overflow with atomic credit management
+- **Event-Driven Completions**: Asynchronous completion processing via hardware events
+- **libcxi Integration**: Uses libcxi library for resource management and hardware abstraction
+
 ## Dependencies
 
-### Required Headers
+### Required Libraries
 
-The driver requires CXI hardware definition headers:
+The driver requires libcxi library and CXI hardware definition headers:
+- `libcxi` - CXI user-space library for resource management
 - `cassini_user_defs.h` - Core hardware definitions
 - `cxi_prov_hw.h` - User-level control interface
 - `libcassini.h` - Hardware control interface
@@ -141,15 +162,30 @@ Current implementation limitations:
 
 ## Development Status
 
-This is an initial implementation providing basic functionality:
+This implementation provides comprehensive packet transmission functionality:
 
-- ✅ Device probe and initialization
-- ✅ Queue setup and management
-- ✅ Basic packet TX/RX framework
-- ✅ Hardware checksum offload framework
-- ✅ Statistics collection
-- ⏳ Advanced offload features (planned)
-- ⏳ Performance optimizations (planned)
+**✅ Completed:**
+- Device probe and initialization via libcxi
+- Queue setup and management (command/event queues)
+- Packet transmission with IDC/DMA path selection
+- Credit-based flow control and backpressure
+- Event-driven completion processing
+- Hardware checksum offload support
+- Memory mapping and zero-copy architecture
+- Comprehensive architecture documentation
+
+**🚧 In Progress:**
+- Packet reception implementation
+- Statistics collection improvements
+- Error handling enhancements
+- Performance optimizations
+
+**📋 Planned:**
+- RSS (Receive Side Scaling) support
+- VLAN filtering capabilities
+- TSO (TCP Segmentation Offload)
+- Interrupt mode support
+- Multi-queue optimizations
 
 ## Contributing
 
