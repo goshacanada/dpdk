@@ -506,6 +506,15 @@ cxi_eth_dev_init(struct rte_eth_dev *eth_dev)
     /* Initialize spinlock */
     rte_spinlock_init(&adapter->lock);
 
+    /* Allocate MAC address array */
+    eth_dev->data->mac_addrs = rte_zmalloc("cxi_mac_addrs",
+                                          sizeof(struct rte_ether_addr), 0);
+    if (!eth_dev->data->mac_addrs) {
+        PMD_INIT_LOG(ERR, "Failed to allocate MAC address array");
+        ret = -ENOMEM;
+        goto init_error;
+    }
+
     /* Probe hardware */
     ret = cxi_hw_probe(pci_dev);
     if (ret) {
@@ -530,6 +539,13 @@ cxi_eth_dev_init(struct rte_eth_dev *eth_dev)
     return 0;
 
 init_error:
+    if (eth_dev->data->mac_addrs) {
+        rte_free(eth_dev->data->mac_addrs);
+        eth_dev->data->mac_addrs = NULL;
+    }
+    if (adapter->cxil_dev) {
+        cxil_close_device(adapter->cxil_dev);
+    }
     rte_free(adapter);
     return ret;
 }
@@ -550,6 +566,12 @@ cxi_eth_dev_uninit(struct rte_eth_dev *eth_dev)
     if (adapter->cxil_dev) {
         cxil_close_device(adapter->cxil_dev);
         adapter->cxil_dev = NULL;
+    }
+
+    /* Free MAC address array */
+    if (eth_dev->data->mac_addrs) {
+        rte_free(eth_dev->data->mac_addrs);
+        eth_dev->data->mac_addrs = NULL;
     }
 
     /* Unmap PCI device */

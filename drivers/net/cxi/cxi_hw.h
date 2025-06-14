@@ -63,6 +63,18 @@ struct cxi_hw_link_info {
     uint8_t link_status;        /* 0 = down, 1 = up */
 };
 
+/* Hardware statistics structure */
+struct cxi_hw_stats {
+    uint64_t rx_packets;        /* Total RX packets */
+    uint64_t rx_bytes;          /* Total RX bytes */
+    uint64_t rx_errors;         /* Total RX errors */
+    uint64_t rx_dropped;        /* Total RX dropped */
+    uint64_t tx_packets;        /* Total TX packets */
+    uint64_t tx_bytes;          /* Total TX bytes */
+    uint64_t tx_errors;         /* Total TX errors */
+    uint64_t tx_dropped;        /* Total TX dropped */
+};
+
 /* Hardware statistics */
 struct cxi_hw_stats {
     uint64_t rx_packets;

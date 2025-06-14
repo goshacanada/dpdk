@@ -8,6 +8,7 @@
 #include <rte_ethdev.h>
 #include <rte_prefetch.h>
 #include <rte_atomic.h>
+#include <rte_udp.h>
 
 #include "cxi_ethdev.h"
 #include "cxi_hw.h"
@@ -16,8 +17,13 @@
 #define CXI_IDC_MAX_SIZE        C_MAX_IDC_PAYLOAD_RES
 #define CXI_PKT_FORMAT_STD      C_PKT_FORMAT_STD
 #define CXI_CSUM_NONE          C_CHECKSUM_CTRL_NONE
+#define CXI_CSUM_IP            C_CHECKSUM_CTRL_IP
 #define CXI_CSUM_TCP           C_CHECKSUM_CTRL_TCP
 #define CXI_CSUM_UDP           C_CHECKSUM_CTRL_UDP
+
+/* Memory address translation macro - following cxi_udp_gen.c pattern */
+#define CXI_VA_TO_IOVA(md, va)  ((md) ? (md)->lac + ((uintptr_t)(va) - (md)->va) : \
+                                 rte_mem_virt2iova(va))
 
 /* RX queue setup */
 int
@@ -389,7 +395,7 @@ cxi_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
     /* Ring doorbell if we transmitted any packets */
     if (nb_tx > 0) {
-        cxi_cq_ring_doorbell(&txq->cq);
+        cxi_cq_ring(txq->cq.cq);
     }
 
     return nb_tx;
@@ -421,11 +427,20 @@ cxi_hw_tx_idc(struct cxi_adapter *adapter,
     idc_cmd.user_ptr = (uintptr_t)mbuf;    /* Store mbuf for completion */
 
     /* Handle checksum offload */
-    if (mbuf->ol_flags & RTE_MBUF_F_TX_IP_CKSUM) {
-        idc_cmd.checksum_ctrl = C_CHECKSUM_CTRL_UDP;
+    if (mbuf->ol_flags & (RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_UDP_CKSUM |
+                         RTE_MBUF_F_TX_TCP_CKSUM)) {
+        if (mbuf->ol_flags & RTE_MBUF_F_TX_TCP_CKSUM) {
+            idc_cmd.checksum_ctrl = C_CHECKSUM_CTRL_TCP;
+            idc_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
+                                      offsetof(struct rte_tcp_hdr, cksum)) / 2;
+        } else if (mbuf->ol_flags & RTE_MBUF_F_TX_UDP_CKSUM) {
+            idc_cmd.checksum_ctrl = C_CHECKSUM_CTRL_UDP;
+            idc_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
+                                      offsetof(struct rte_udp_hdr, dgram_cksum)) / 2;
+        } else {
+            idc_cmd.checksum_ctrl = C_CHECKSUM_CTRL_IP;
+        }
         idc_cmd.checksum_start = mbuf->l2_len / 2;
-        idc_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
-                                  offsetof(struct rte_tcp_hdr, cksum)) / 2;
     }
 
     /* Submit IDC command with packet data */
@@ -479,11 +494,20 @@ cxi_hw_tx_dma(struct cxi_adapter *adapter,
     dma_cmd.user_ptr = (uintptr_t)mbuf;    /* Store mbuf for completion */
 
     /* Handle checksum offload */
-    if (mbuf->ol_flags & RTE_MBUF_F_TX_IP_CKSUM) {
-        dma_cmd.checksum_ctrl = C_CHECKSUM_CTRL_UDP;
+    if (mbuf->ol_flags & (RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_UDP_CKSUM |
+                         RTE_MBUF_F_TX_TCP_CKSUM)) {
+        if (mbuf->ol_flags & RTE_MBUF_F_TX_TCP_CKSUM) {
+            dma_cmd.checksum_ctrl = C_CHECKSUM_CTRL_TCP;
+            dma_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
+                                      offsetof(struct rte_tcp_hdr, cksum)) / 2;
+        } else if (mbuf->ol_flags & RTE_MBUF_F_TX_UDP_CKSUM) {
+            dma_cmd.checksum_ctrl = C_CHECKSUM_CTRL_UDP;
+            dma_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
+                                      offsetof(struct rte_udp_hdr, dgram_cksum)) / 2;
+        } else {
+            dma_cmd.checksum_ctrl = C_CHECKSUM_CTRL_IP;
+        }
         dma_cmd.checksum_start = mbuf->l2_len / 2;
-        dma_cmd.checksum_offset = (mbuf->l2_len + mbuf->l3_len +
-                                  offsetof(struct rte_tcp_hdr, cksum)) / 2;
     }
 
     /* Build scatter-gather list using mapped IOVA addresses */
