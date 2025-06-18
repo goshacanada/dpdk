@@ -77,18 +77,18 @@ cxi_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
         return -ENOMEM;
     }
 
-    /* Allocate command queue */
-    ret = cxi_hw_cq_alloc(adapter, &rxq->cq, nb_desc, false);
-    if (ret) {
-        PMD_DRV_LOG(ERR, "Failed to allocate RX command queue");
-        goto setup_error;
-    }
-
-    /* Allocate event queue */
+    /* Allocate event queue FIRST - following cxi_udp_gen.c pattern */
     ret = cxi_hw_eq_alloc(adapter, &rxq->eq, nb_desc);
     if (ret) {
         PMD_DRV_LOG(ERR, "Failed to allocate RX event queue");
-        cxi_hw_cq_free(adapter, &rxq->cq);
+        goto setup_error;
+    }
+
+    /* Allocate command queue with EQ reference - following cxi_udp_gen.c pattern */
+    ret = cxi_hw_cq_alloc(adapter, &rxq->cq, &rxq->eq, nb_desc, false);
+    if (ret) {
+        PMD_DRV_LOG(ERR, "Failed to allocate RX command queue");
+        cxi_hw_eq_free(adapter, &rxq->eq);
         goto setup_error;
     }
 
@@ -171,18 +171,18 @@ cxi_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
         return -ENOMEM;
     }
 
-    /* Allocate command queue */
-    ret = cxi_hw_cq_alloc(adapter, &txq->cq, nb_desc, true);
-    if (ret) {
-        PMD_DRV_LOG(ERR, "Failed to allocate TX command queue");
-        goto setup_error;
-    }
-
-    /* Allocate event queue */
+    /* Allocate event queue FIRST - following cxi_udp_gen.c pattern */
     ret = cxi_hw_eq_alloc(adapter, &txq->eq, nb_desc);
     if (ret) {
         PMD_DRV_LOG(ERR, "Failed to allocate TX event queue");
-        cxi_hw_cq_free(adapter, &txq->cq);
+        goto setup_error;
+    }
+
+    /* Allocate command queue with EQ reference - following cxi_udp_gen.c pattern */
+    ret = cxi_hw_cq_alloc(adapter, &txq->cq, &txq->eq, nb_desc, true);
+    if (ret) {
+        PMD_DRV_LOG(ERR, "Failed to allocate TX command queue");
+        cxi_hw_eq_free(adapter, &txq->eq);
         goto setup_error;
     }
 

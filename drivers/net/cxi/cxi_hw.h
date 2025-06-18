@@ -105,9 +105,9 @@ int cxi_hw_reset_device(struct cxi_adapter *adapter);
 int cxi_hw_get_capabilities(struct cxi_adapter *adapter,
                             struct cxi_hw_caps *caps);
 
-/* Command queue management */
+/* Command queue management - following cxi_udp_gen.c pattern */
 int cxi_hw_cq_alloc(struct cxi_adapter *adapter,
-                    struct cxi_cq *cq, uint32_t size, bool is_tx);
+                    struct cxi_cq *cq, struct cxi_eq *eq, uint32_t size, bool is_tx);
 void cxi_hw_cq_free(struct cxi_adapter *adapter,
                     struct cxi_cq *cq);
 int cxi_hw_cq_start(struct cxi_adapter *adapter,
@@ -174,6 +174,18 @@ int cxi_hw_set_mtu(struct cxi_adapter *adapter, uint16_t mtu);
 /* Interrupt management */
 int cxi_hw_enable_interrupts(struct cxi_adapter *adapter);
 void cxi_hw_disable_interrupts(struct cxi_adapter *adapter);
+
+/* RSS configuration - uses libcxi */
+int cxi_hw_configure_rss(struct cxi_adapter *adapter,
+                         struct rte_eth_rss_conf *rss_conf);
+int cxi_hw_rss_hash_update(struct cxi_adapter *adapter,
+                           struct rte_eth_rss_conf *rss_conf);
+int cxi_hw_rss_reta_update(struct cxi_adapter *adapter,
+                           struct rte_eth_rss_reta_entry64 *reta_conf,
+                           uint16_t reta_size);
+int cxi_hw_rss_reta_query(struct cxi_adapter *adapter,
+                          struct rte_eth_rss_reta_entry64 *reta_conf,
+                          uint16_t reta_size);
 
 /* Utility functions */
 static inline bool cxi_is_cassini_2(struct cxi_adapter *adapter)

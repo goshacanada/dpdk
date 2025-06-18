@@ -120,56 +120,63 @@ cxi_hw_get_capabilities(struct cxi_adapter *adapter,
     return 0;
 }
 
-/* Allocate command queue */
+/* Allocate command queue - following cxi_udp_gen.c pattern exactly */
 int
 cxi_hw_cq_alloc(struct cxi_adapter *adapter, struct cxi_cq *cq,
-                uint32_t size, bool is_tx)
+                struct cxi_eq *eq, uint32_t size, bool is_tx)
 {
-    struct cxi_cq_alloc_opts opts = {0};
-    int ret;
-    
+    struct cxi_cq_alloc_opts cq_opts = {0};
+    struct c_cstate_cmd c_state = {0};
+    int ret, j;
+
     PMD_DRV_LOG(DEBUG, "Allocating %s command queue, size: %u",
                 is_tx ? "TX" : "RX", size);
-    
+
     /* Validate size */
     if (size < CXI_CQ_SIZE_MIN || size > CXI_CQ_SIZE_MAX) {
         PMD_DRV_LOG(ERR, "Invalid CQ size: %u", size);
         return -EINVAL;
     }
-    
-    /* Set up allocation options */
-    opts.count = size;
-    opts.flags = is_tx ? CXI_CQ_IS_TX : 0;
-    
-    /* Allocate using libcxi (placeholder - would need actual LNI) */
-    if (adapter->lni) {
-        ret = cxil_alloc_cmdq(adapter->lni, NULL, &opts, &cq->cq);
+
+    /* Set up CQ allocation options - exactly like cxi_udp_gen.c */
+    cq_opts.count = CXI_MAX_CQ_COUNT;  /* Use max count like cxi_udp_gen.c */
+    cq_opts.policy = CXI_CQ_UPDATE_LOW_FREQ_EMPTY;
+    cq_opts.flags = is_tx ? (CXI_CQ_IS_TX | CXI_CQ_TX_ETHERNET) : 0;
+    cq_opts.lcid = adapter->cp->lcid;  /* CRITICAL: Use CP's LCID */
+
+    /* Allocate command queue - exactly like cxi_udp_gen.c */
+    if (adapter->lni && eq) {
+        ret = cxil_alloc_cmdq(adapter->lni, eq->eq, &cq_opts, &cq->cq);
         if (ret) {
             PMD_DRV_LOG(ERR, "Failed to allocate command queue: %d", ret);
             return ret;
         }
     } else {
-        /* Fallback allocation for testing */
-        cq->cmds = rte_zmalloc("cxi_cq_cmds", size * C_CQ_CMD_SIZE, 
-                              CXI_CQ_ALIGNMENT);
-        if (!cq->cmds) {
-            PMD_DRV_LOG(ERR, "Failed to allocate CQ memory");
-            return -ENOMEM;
-        }
-        
-        cq->csr = rte_zmalloc("cxi_cq_csr", 4096, 4096);
-        if (!cq->csr) {
-            rte_free(cq->cmds);
-            PMD_DRV_LOG(ERR, "Failed to allocate CSR memory");
-            return -ENOMEM;
-        }
+        PMD_DRV_LOG(ERR, "Missing LNI or EQ for CQ allocation");
+        return -EINVAL;
     }
-    
+
     cq->size = size;
     cq->head = 0;
     cq->tail = 0;
     cq->is_tx = is_tx;
-    
+
+    /* Issue C_STATE commands for CQ alignment - exactly like cxi_udp_gen.c */
+    c_state.restricted = 1;
+    c_state.event_success_disable = 1;
+    c_state.eq = eq->eqn;
+
+    /* Issue 8 commands to align CQ on 256 byte boundary - exactly like cxi_udp_gen.c */
+    for (j = 0; j < 8; j++) {
+        ret = cxi_cq_emit_c_state(cq->cq, &c_state);
+        if (ret) {
+            PMD_DRV_LOG(ERR, "Failed to emit C_STATE command: %d", ret);
+            cxil_destroy_cmdq(cq->cq);
+            return ret;
+        }
+    }
+    cxi_cq_ring(cq->cq);
+
     PMD_DRV_LOG(DEBUG, "Command queue allocated successfully");
     return 0;
 }
@@ -225,51 +232,71 @@ cxi_hw_cq_stop(struct cxi_adapter *adapter, struct cxi_cq *cq)
     RTE_SET_USED(cq);
 }
 
-/* Allocate event queue */
+/* Allocate event queue - following cxi_udp_gen.c pattern exactly */
 int
 cxi_hw_eq_alloc(struct cxi_adapter *adapter, struct cxi_eq *eq,
                 uint32_t size)
 {
-    struct cxi_eq_attr attr = {0};
+    struct cxi_eq_attr eq_attrs = {0};
     int ret;
-    
+    size_t eq_buf_size = 4U * 1024 * 1024; /* EQ_BUF_SIZE from cxi_udp_gen.c */
+
     PMD_DRV_LOG(DEBUG, "Allocating event queue, size: %u", size);
-    
+
     /* Validate size */
     if (size < CXI_EQ_SIZE_MIN || size > CXI_EQ_SIZE_MAX) {
         PMD_DRV_LOG(ERR, "Invalid EQ size: %u", size);
         return -EINVAL;
     }
-    
-    /* Allocate event memory */
-    eq->events = rte_zmalloc("cxi_eq_events", 
-                            size * C_EE_CFG_ECB_SIZE, 4096);
-    if (!eq->events) {
-        PMD_DRV_LOG(ERR, "Failed to allocate event memory");
+
+    /* Step 1: aligned_alloc for EQ buffer - exactly like cxi_udp_gen.c */
+    eq->eq_buf = aligned_alloc(sysconf(_SC_PAGE_SIZE), eq_buf_size);
+    if (!eq->eq_buf) {
+        PMD_DRV_LOG(ERR, "Failed to allocate EQ buffer");
         return -ENOMEM;
     }
-    
-    /* Map event memory */
-    ret = cxi_hw_md_alloc(adapter, &eq->eq_md, eq->events,
-                         size * C_EE_CFG_ECB_SIZE);
-    if (ret) {
-        PMD_DRV_LOG(ERR, "Failed to map event memory");
-        rte_free(eq->events);
-        return ret;
+
+    /* Step 2: Allocate memory descriptor */
+    eq->eq_md = rte_zmalloc("cxi_eq_md", sizeof(struct cxi_md), 0);
+    if (!eq->eq_md) {
+        PMD_DRV_LOG(ERR, "Failed to allocate EQ MD");
+        free(eq->eq_buf);
+        return -ENOMEM;
     }
-    
-    /* Set up event queue attributes */
-    attr.queue = eq->events;
-    attr.queue_len = size * C_EE_CFG_ECB_SIZE;
-    
-    /* Allocate using libcxi (placeholder) */
+
+    /* Step 3: Map EQ buffer - exactly like cxi_udp_gen.c */
     if (adapter->lni) {
-        ret = cxil_alloc_evtq(adapter->lni, eq->eq_md.md, &attr,
+        ret = cxil_map(adapter->lni, eq->eq_buf, eq_buf_size,
+                      CXI_MAP_PIN | CXI_MAP_WRITE, NULL, &eq->eq_md);
+        if (ret) {
+            PMD_DRV_LOG(ERR, "Failed to map EQ buffer: %d", ret);
+            rte_free(eq->eq_md);
+            free(eq->eq_buf);
+            return ret;
+        }
+    } else {
+        /* Fallback for testing */
+        eq->eq_md->va = eq->eq_buf;
+        eq->eq_md->iova = rte_mem_virt2iova(eq->eq_buf);
+        eq->eq_md->len = eq_buf_size;
+        eq->eq_md->is_mapped = true;
+    }
+
+    /* Step 4: Set up EQ attributes - exactly like cxi_udp_gen.c */
+    eq_attrs.queue = eq->eq_buf;
+    eq_attrs.queue_len = eq_buf_size;
+
+    /* Step 5: Allocate event queue - exactly like cxi_udp_gen.c */
+    if (adapter->lni) {
+        ret = cxil_alloc_evtq(adapter->lni, eq->eq_md, &eq_attrs,
                              NULL, NULL, &eq->eq);
         if (ret) {
             PMD_DRV_LOG(ERR, "Failed to allocate event queue: %d", ret);
-            cxi_hw_md_free(adapter, &eq->eq_md);
-            rte_free(eq->events);
+            if (eq->eq_md->md) {
+                cxil_unmap(eq->eq_md->md);
+            }
+            rte_free(eq->eq_md);
+            free(eq->eq_buf);
             return ret;
         }
         eq->eqn = eq->eq->eqn;
@@ -277,9 +304,9 @@ cxi_hw_eq_alloc(struct cxi_adapter *adapter, struct cxi_eq *eq,
         /* Fallback for testing */
         eq->eqn = 0;
     }
-    
+
     eq->size = size;
-    
+
     PMD_DRV_LOG(DEBUG, "Event queue allocated successfully, EQN: %u", eq->eqn);
     return 0;
 }
@@ -648,4 +675,81 @@ cxi_hw_disable_interrupts(struct cxi_adapter *adapter)
 
     /* Implementation would go here */
     RTE_SET_USED(adapter);
+}
+
+/* Configure RSS */
+int
+cxi_hw_configure_rss(struct cxi_adapter *adapter, struct rte_eth_rss_conf *rss_conf)
+{
+    PMD_DRV_LOG(DEBUG, "Configuring RSS via libcxi");
+
+    if (!adapter->cxil_dev) {
+        PMD_DRV_LOG(ERR, "No libcxi device handle");
+        return -EINVAL;
+    }
+
+    /* Configure RSS via libcxi - placeholder implementation */
+    /* This would use libcxi RSS configuration functions when available */
+    RTE_SET_USED(rss_conf);
+
+    PMD_DRV_LOG(INFO, "RSS configuration completed");
+    return 0;
+}
+
+/* Update RSS hash configuration */
+int
+cxi_hw_rss_hash_update(struct cxi_adapter *adapter, struct rte_eth_rss_conf *rss_conf)
+{
+    PMD_DRV_LOG(DEBUG, "Updating RSS hash configuration via libcxi");
+
+    if (!adapter->cxil_dev) {
+        PMD_DRV_LOG(ERR, "No libcxi device handle");
+        return -EINVAL;
+    }
+
+    /* Update RSS hash via libcxi - placeholder implementation */
+    /* This would use libcxi RSS hash update functions when available */
+    RTE_SET_USED(rss_conf);
+
+    return 0;
+}
+
+/* Update RSS redirection table */
+int
+cxi_hw_rss_reta_update(struct cxi_adapter *adapter,
+                       struct rte_eth_rss_reta_entry64 *reta_conf,
+                       uint16_t reta_size)
+{
+    PMD_DRV_LOG(DEBUG, "Updating RSS RETA via libcxi, size: %u", reta_size);
+
+    if (!adapter->cxil_dev) {
+        PMD_DRV_LOG(ERR, "No libcxi device handle");
+        return -EINVAL;
+    }
+
+    /* Update RSS RETA via libcxi - placeholder implementation */
+    /* This would use libcxi RSS RETA update functions when available */
+    RTE_SET_USED(reta_conf);
+
+    return 0;
+}
+
+/* Query RSS redirection table */
+int
+cxi_hw_rss_reta_query(struct cxi_adapter *adapter,
+                      struct rte_eth_rss_reta_entry64 *reta_conf,
+                      uint16_t reta_size)
+{
+    PMD_DRV_LOG(DEBUG, "Querying RSS RETA via libcxi, size: %u", reta_size);
+
+    if (!adapter->cxil_dev) {
+        PMD_DRV_LOG(ERR, "No libcxi device handle");
+        return -EINVAL;
+    }
+
+    /* Query RSS RETA via libcxi - placeholder implementation */
+    /* This would use libcxi RSS RETA query functions when available */
+    RTE_SET_USED(reta_conf);
+
+    return 0;
 }

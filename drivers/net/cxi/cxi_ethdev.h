@@ -44,6 +44,38 @@
 /* Command queue alignment */
 #define CXI_CQ_ALIGNMENT     64
 
+/* RSS constants - from CXI hardware definitions */
+#define CXI_ETH_MAX_RSS_QUEUES    CXI_ETH_MAX_RSS_QUEUES
+#define CXI_ETH_MAX_INDIR_ENTRIES CXI_ETH_MAX_INDIR_ENTRIES
+#define CXI_ETH_HASH_KEY_SIZE     CXI_ETH_HASH_KEY_SIZE
+
+/* RSS offload types supported by CXI hardware */
+#define CXI_RSS_OFFLOAD_ALL ( \
+    RTE_ETH_RSS_IPV4 | \
+    RTE_ETH_RSS_FRAG_IPV4 | \
+    RTE_ETH_RSS_NONFRAG_IPV4_TCP | \
+    RTE_ETH_RSS_NONFRAG_IPV4_UDP | \
+    RTE_ETH_RSS_IPV6 | \
+    RTE_ETH_RSS_FRAG_IPV6 | \
+    RTE_ETH_RSS_NONFRAG_IPV6_TCP | \
+    RTE_ETH_RSS_NONFRAG_IPV6_UDP)
+
+/* Multi-queue modes */
+enum cxi_mq_mode {
+    CXI_MQ_MODE_NONE = 0,
+    CXI_MQ_MODE_RSS,
+    CXI_MQ_MODE_DCB,
+};
+
+/* RSS configuration */
+struct cxi_rss_conf {
+    uint8_t rss_key[CXI_ETH_HASH_KEY_SIZE];
+    uint32_t rss_key_len;
+    uint64_t rss_hf;
+    uint16_t reta_size;
+    uint16_t reta[CXI_ETH_MAX_INDIR_ENTRIES];
+};
+
 /* Forward declarations */
 struct cxi_adapter;
 struct cxi_rx_queue;
@@ -69,11 +101,11 @@ struct cxi_cq {
     bool is_tx;                 /* TX or RX queue */
 };
 
-/* CXI Event Queue wrapper */
+/* CXI Event Queue wrapper - following cxi_udp_gen.c pattern */
 struct cxi_eq {
-    struct cxi_eq *eq;          /* CXI event queue */
-    void *events;               /* Event memory */
-    struct cxi_md eq_md;        /* Event queue memory descriptor */
+    struct cxi_eq *eq;          /* CXI event queue handle */
+    void *eq_buf;               /* Event buffer - aligned_alloc'd like cxi_udp_gen.c */
+    struct cxi_md *eq_md;       /* Memory descriptor for EQ buffer */
     uint32_t size;              /* Queue size */
     uint32_t eqn;               /* Event queue number */
     void (*event_cb)(void *);   /* Event callback */
@@ -161,11 +193,16 @@ struct cxi_adapter {
     /* CXI device context - libcxi handles */
     struct cxil_dev *cxil_dev;  /* libcxi device handle */
     struct cxil_lni *lni;       /* Logical Network Interface */
-    struct cxi_cp *cp;          /* Communication Profile */
+    struct cxi_cp *cp;          /* Communication Profile - CRITICAL for ethernet */
 
     /* Memory mapping - following cxi_udp_gen.c pattern */
     struct cxi_md *tx_md;       /* TX memory descriptor for LAC */
     uint32_t phys_lac;          /* Physical LAC for DMA operations */
+
+    /* Multi-queue configuration */
+    bool rss_enabled;           /* RSS enabled flag */
+    enum cxi_mq_mode tx_mq_mode; /* TX multi-queue mode */
+    struct cxi_rss_conf rss_conf; /* RSS configuration */
     
     /* Queues */
     struct cxi_rx_queue **rx_queues;
@@ -236,6 +273,22 @@ int cxi_hw_tx_dma(struct cxi_adapter *adapter, struct cxi_tx_queue *txq,
                   struct rte_mbuf *mbuf);
 uint16_t cxi_hw_tx_process_events(struct cxi_adapter *adapter,
                                   struct cxi_tx_queue *txq);
+uint16_t cxi_hw_rx_process_events(struct cxi_adapter *adapter,
+                                  struct cxi_rx_queue *rxq,
+                                  struct rte_mbuf **rx_pkts,
+                                  uint16_t nb_pkts);
+
+/* RSS functions */
+int cxi_rss_hash_update(struct rte_eth_dev *dev,
+                        struct rte_eth_rss_conf *rss_conf);
+int cxi_rss_hash_conf_get(struct rte_eth_dev *dev,
+                          struct rte_eth_rss_conf *rss_conf);
+int cxi_rss_reta_update(struct rte_eth_dev *dev,
+                        struct rte_eth_rss_reta_entry64 *reta_conf,
+                        uint16_t reta_size);
+int cxi_rss_reta_query(struct rte_eth_dev *dev,
+                       struct rte_eth_rss_reta_entry64 *reta_conf,
+                       uint16_t reta_size);
 
 /* Hardware interface */
 int cxi_hw_init(struct cxi_adapter *adapter);

@@ -62,6 +62,10 @@ static const struct eth_dev_ops cxi_eth_dev_ops = {
     .allmulticast_enable  = cxi_allmulticast_enable,
     .allmulticast_disable = cxi_allmulticast_disable,
     .mtu_set              = cxi_mtu_set,
+    .rss_hash_update      = cxi_rss_hash_update,
+    .rss_hash_conf_get    = cxi_rss_hash_conf_get,
+    .reta_update          = cxi_rss_reta_update,
+    .reta_query           = cxi_rss_reta_query,
 };
 
 static int
@@ -113,6 +117,13 @@ cxi_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
     dev_info->tx_desc_lim.nb_min = CXI_MIN_QUEUE_SIZE;
     dev_info->tx_desc_lim.nb_align = 1;
 
+    /* RSS capabilities */
+    if (caps.supports_rss) {
+        dev_info->reta_size = CXI_ETH_MAX_INDIR_ENTRIES;
+        dev_info->hash_key_size = CXI_ETH_HASH_KEY_SIZE;
+        dev_info->flow_type_rss_offloads = CXI_RSS_OFFLOAD_ALL;
+    }
+
     /* Default configuration */
     dev_info->default_rxconf.rx_free_thresh = 32;
     dev_info->default_txconf.tx_free_thresh = 32;
@@ -146,10 +157,26 @@ cxi_dev_configure(struct rte_eth_dev *dev)
     adapter->num_rx_queues = dev->data->nb_rx_queues;
     adapter->num_tx_queues = dev->data->nb_tx_queues;
 
-    /* Configure promiscuous mode */
+    /* Configure multi-queue modes */
     if (conf->rxmode.mq_mode & RTE_ETH_MQ_RX_RSS) {
         PMD_DRV_LOG(INFO, "RSS mode requested");
-        /* RSS configuration would go here */
+        ret = cxi_hw_configure_rss(adapter, &conf->rx_adv_conf.rss_conf);
+        if (ret) {
+            PMD_DRV_LOG(ERR, "Failed to configure RSS: %d", ret);
+            return ret;
+        }
+        adapter->rss_enabled = true;
+    } else {
+        adapter->rss_enabled = false;
+    }
+
+    /* Configure TX multi-queue mode */
+    if (conf->txmode.mq_mode & RTE_ETH_MQ_TX_NONE) {
+        /* Simple round-robin or single queue mode */
+        adapter->tx_mq_mode = CXI_MQ_MODE_NONE;
+    } else {
+        /* Future: support for other TX MQ modes */
+        adapter->tx_mq_mode = CXI_MQ_MODE_NONE;
     }
 
     return 0;
@@ -315,6 +342,139 @@ cxi_dev_reset(struct rte_eth_dev *dev)
     }
 
     return cxi_dev_start(dev);
+}
+
+/* RSS hash configuration update */
+int
+cxi_rss_hash_update(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf)
+{
+    struct cxi_adapter *adapter = dev->data->dev_private;
+    int ret;
+
+    PMD_DRV_LOG(DEBUG, "Updating RSS hash configuration");
+
+    if (!adapter->rss_enabled) {
+        PMD_DRV_LOG(ERR, "RSS not enabled");
+        return -ENOTSUP;
+    }
+
+    ret = cxi_hw_rss_hash_update(adapter, rss_conf);
+    if (ret) {
+        PMD_DRV_LOG(ERR, "Failed to update RSS hash: %d", ret);
+        return ret;
+    }
+
+    /* Update local configuration */
+    if (rss_conf->rss_key && rss_conf->rss_key_len <= CXI_ETH_HASH_KEY_SIZE) {
+        memcpy(adapter->rss_conf.rss_key, rss_conf->rss_key, rss_conf->rss_key_len);
+        adapter->rss_conf.rss_key_len = rss_conf->rss_key_len;
+    }
+    adapter->rss_conf.rss_hf = rss_conf->rss_hf;
+
+    return 0;
+}
+
+/* RSS hash configuration get */
+int
+cxi_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf)
+{
+    struct cxi_adapter *adapter = dev->data->dev_private;
+
+    PMD_DRV_LOG(DEBUG, "Getting RSS hash configuration");
+
+    if (!adapter->rss_enabled) {
+        PMD_DRV_LOG(ERR, "RSS not enabled");
+        return -ENOTSUP;
+    }
+
+    if (rss_conf->rss_key && rss_conf->rss_key_len >= adapter->rss_conf.rss_key_len) {
+        memcpy(rss_conf->rss_key, adapter->rss_conf.rss_key,
+               adapter->rss_conf.rss_key_len);
+    }
+    rss_conf->rss_key_len = adapter->rss_conf.rss_key_len;
+    rss_conf->rss_hf = adapter->rss_conf.rss_hf;
+
+    return 0;
+}
+
+/* RSS redirection table update */
+int
+cxi_rss_reta_update(struct rte_eth_dev *dev,
+                    struct rte_eth_rss_reta_entry64 *reta_conf,
+                    uint16_t reta_size)
+{
+    struct cxi_adapter *adapter = dev->data->dev_private;
+    int ret;
+
+    PMD_DRV_LOG(DEBUG, "Updating RSS RETA, size: %u", reta_size);
+
+    if (!adapter->rss_enabled) {
+        PMD_DRV_LOG(ERR, "RSS not enabled");
+        return -ENOTSUP;
+    }
+
+    if (reta_size > CXI_ETH_MAX_INDIR_ENTRIES) {
+        PMD_DRV_LOG(ERR, "RETA size too large: %u (max: %u)",
+                    reta_size, CXI_ETH_MAX_INDIR_ENTRIES);
+        return -EINVAL;
+    }
+
+    ret = cxi_hw_rss_reta_update(adapter, reta_conf, reta_size);
+    if (ret) {
+        PMD_DRV_LOG(ERR, "Failed to update RSS RETA: %d", ret);
+        return ret;
+    }
+
+    /* Update local RETA configuration */
+    for (uint16_t i = 0; i < reta_size; i++) {
+        uint16_t idx = i / RTE_ETH_RETA_GROUP_SIZE;
+        uint16_t shift = i % RTE_ETH_RETA_GROUP_SIZE;
+        if (reta_conf[idx].mask & (1ULL << shift)) {
+            adapter->rss_conf.reta[i] = reta_conf[idx].reta[shift];
+        }
+    }
+
+    return 0;
+}
+
+/* RSS redirection table query */
+int
+cxi_rss_reta_query(struct rte_eth_dev *dev,
+                   struct rte_eth_rss_reta_entry64 *reta_conf,
+                   uint16_t reta_size)
+{
+    struct cxi_adapter *adapter = dev->data->dev_private;
+    int ret;
+
+    PMD_DRV_LOG(DEBUG, "Querying RSS RETA, size: %u", reta_size);
+
+    if (!adapter->rss_enabled) {
+        PMD_DRV_LOG(ERR, "RSS not enabled");
+        return -ENOTSUP;
+    }
+
+    if (reta_size > CXI_ETH_MAX_INDIR_ENTRIES) {
+        PMD_DRV_LOG(ERR, "RETA size too large: %u (max: %u)",
+                    reta_size, CXI_ETH_MAX_INDIR_ENTRIES);
+        return -EINVAL;
+    }
+
+    ret = cxi_hw_rss_reta_query(adapter, reta_conf, reta_size);
+    if (ret) {
+        PMD_DRV_LOG(ERR, "Failed to query RSS RETA: %d", ret);
+        return ret;
+    }
+
+    /* Fill in the RETA configuration from local cache */
+    for (uint16_t i = 0; i < reta_size; i++) {
+        uint16_t idx = i / RTE_ETH_RETA_GROUP_SIZE;
+        uint16_t shift = i % RTE_ETH_RETA_GROUP_SIZE;
+        if (reta_conf[idx].mask & (1ULL << shift)) {
+            reta_conf[idx].reta[shift] = adapter->rss_conf.reta[i];
+        }
+    }
+
+    return 0;
 }
 
 static int
@@ -503,6 +663,20 @@ cxi_eth_dev_init(struct rte_eth_dev *eth_dev)
         goto init_error;
     }
 
+    /* Allocate LNI - following cxi_udp_gen.c pattern */
+    ret = cxil_alloc_lni(adapter->cxil_dev, &adapter->lni, CXI_DEFAULT_SVC_ID);
+    if (ret) {
+        PMD_INIT_LOG(ERR, "Failed to allocate LNI: %d", ret);
+        goto init_error;
+    }
+
+    /* Allocate Communication Profile - CRITICAL for ethernet like cxi_udp_gen.c */
+    ret = cxil_alloc_cp(adapter->lni, 0, CXI_TC_ETH, CXI_TC_TYPE_DEFAULT, &adapter->cp);
+    if (ret) {
+        PMD_INIT_LOG(ERR, "Failed to allocate Communication Profile: %d", ret);
+        goto init_error;
+    }
+
     /* Initialize spinlock */
     rte_spinlock_init(&adapter->lock);
 
@@ -543,8 +717,17 @@ init_error:
         rte_free(eth_dev->data->mac_addrs);
         eth_dev->data->mac_addrs = NULL;
     }
+    if (adapter->cp) {
+        cxil_destroy_cp(adapter->cp);
+        adapter->cp = NULL;
+    }
+    if (adapter->lni) {
+        cxil_destroy_lni(adapter->lni);
+        adapter->lni = NULL;
+    }
     if (adapter->cxil_dev) {
         cxil_close_device(adapter->cxil_dev);
+        adapter->cxil_dev = NULL;
     }
     rte_free(adapter);
     return ret;
@@ -562,7 +745,15 @@ cxi_eth_dev_uninit(struct rte_eth_dev *eth_dev)
 
     cxi_dev_close(eth_dev);
 
-    /* Close libcxi device */
+    /* Cleanup libcxi resources in reverse order */
+    if (adapter->cp) {
+        cxil_destroy_cp(adapter->cp);
+        adapter->cp = NULL;
+    }
+    if (adapter->lni) {
+        cxil_destroy_lni(adapter->lni);
+        adapter->lni = NULL;
+    }
     if (adapter->cxil_dev) {
         cxil_close_device(adapter->cxil_dev);
         adapter->cxil_dev = NULL;
