@@ -96,6 +96,75 @@ Multi-queue RSS provides significant performance improvements:
 - **NUMA Awareness**: Queues allocated on appropriate NUMA nodes
 - **Load Balancing**: Hardware distributes traffic evenly across queues
 
+## Multi-TX Queue Support
+
+The CXI PMD provides comprehensive multi-TX queue support for maximum transmission performance:
+
+### TX Queue Architecture
+
+- **64 Independent TX Queues**: Each queue has dedicated Command Queue (CQ) and Event Queue (EQ)
+- **Per-Queue Credit Management**: Atomic credit tracking prevents queue overflow
+- **Hardware Isolation**: No locking required between TX queues for lock-free operation
+- **Dual-Path Transmission**: Each queue supports both IDC and DMA paths
+- **NUMA-Aware Allocation**: TX queues allocated on appropriate NUMA nodes
+
+### TX Queue Features
+
+```c
+// Each TX queue provides:
+struct cxi_tx_queue {
+    uint16_t queue_id;              // Queue identifier (0-63)
+    struct cxi_cq cq;               // Dedicated command queue
+    struct cxi_eq eq;               // Dedicated event queue
+    rte_atomic32_t tx_credits;      // Per-queue credit management
+    uint32_t force_dma_interval;    // IDC/DMA balancing
+    // Per-queue statistics
+    uint64_t tx_packets;
+    uint64_t tx_bytes;
+    uint64_t tx_errors;
+};
+```
+
+### Application Usage
+
+```c
+// Configure multiple TX queues
+struct rte_eth_conf port_conf = {
+    .txmode = {
+        .mq_mode = RTE_ETH_MQ_TX_NONE,  // Simple multi-queue mode
+        .offloads = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+                   RTE_ETH_TX_OFFLOAD_TCP_CKSUM,
+    },
+};
+
+// Setup 8 TX queues
+rte_eth_dev_configure(port_id, nb_rx_queues, 8, &port_conf);
+for (int q = 0; q < 8; q++) {
+    rte_eth_tx_queue_setup(port_id, q, 1024, socket_id, NULL);
+}
+
+// Each worker core uses dedicated TX queue (lock-free)
+static int worker_thread(void *arg) {
+    uint16_t queue_id = *(uint16_t *)arg;
+    struct rte_mbuf *pkts[32];
+
+    while (running) {
+        // Process packets...
+
+        // Transmit on dedicated queue - no locking needed
+        uint16_t sent = rte_eth_tx_burst(port_id, queue_id, pkts, nb_pkts);
+    }
+    return 0;
+}
+```
+
+### CXI-Specific Optimizations
+
+- **Automatic IDC/DMA Selection**: Small packets (≤256 bytes) use IDC, large packets use DMA
+- **Credit-Based Flow Control**: Prevents queue overflow with atomic operations
+- **Queue-Specific Flow Hash**: Each queue uses its ID as flow hash for hardware distribution
+- **Scatter-Gather Support**: DMA path supports up to 5 segments per packet
+
 ## Architecture Documentation
 
 Comprehensive architecture documentation is available in this directory:
@@ -202,18 +271,30 @@ for (int q = 0; q < 8; q++) {
 
 ## Performance Tuning
 
-### Multi-Queue RSS Configuration
+### Multi-Queue Configuration
 
+#### RX Queue (RSS) Optimization
 - **Queue Count**: Use power-of-2 queues (2, 4, 8, 16, 32, 64) for optimal RSS
-- **CPU Mapping**: Assign one queue per CPU core for maximum parallelism
+- **CPU Mapping**: Assign one RX queue per CPU core for maximum parallelism
 - **NUMA Awareness**: Allocate queues on same NUMA node as processing cores
 - **Hash Types**: Enable appropriate hash types for your traffic patterns
 
+#### TX Queue Optimization
+- **Queue Count**: Match TX queues to RX queues (1:1 ratio recommended)
+- **Per-Core Assignment**: Each worker core gets dedicated TX queue (lock-free)
+- **Credit Management**: Monitor per-queue credits to avoid blocking
+- **IDC/DMA Balance**: Let driver automatically select optimal path
+
 ```c
-// Optimal RSS configuration for 8-core system
+// Optimal multi-queue configuration for 8-core system
 struct rte_eth_conf port_conf = {
     .rxmode = {
         .mq_mode = RTE_ETH_MQ_RX_RSS,
+    },
+    .txmode = {
+        .mq_mode = RTE_ETH_MQ_TX_NONE,  // Simple multi-queue
+        .offloads = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+                   RTE_ETH_TX_OFFLOAD_TCP_CKSUM,
     },
     .rx_adv_conf = {
         .rss_conf = {
@@ -222,6 +303,9 @@ struct rte_eth_conf port_conf = {
         },
     },
 };
+
+// Configure 8 RX + 8 TX queues
+rte_eth_dev_configure(port_id, 8, 8, &port_conf);
 ```
 
 ### Packet Size Optimization
@@ -264,15 +348,18 @@ This implementation provides comprehensive multi-queue packet processing functio
 
 **✅ Completed:**
 - Device probe and initialization via libcxi
-- Multi-queue setup and management (up to 64 RX/TX queues)
+- **Multi-TX Queue Support (up to 64 independent TX queues)**
+- **Multi-RX Queue Support with RSS (up to 64 queues)**
 - RSS (Receive Side Scaling) with hardware hash support
 - RSS indirection table (RETA) configuration
+- **Per-queue credit management with atomic operations**
 - Packet transmission with IDC/DMA path selection
-- Credit-based flow control and backpressure
+- **Lock-free multi-queue operation**
 - Event-driven completion processing
 - Hardware checksum offload support
 - Memory mapping and zero-copy architecture
-- Per-queue statistics and error tracking
+- **Per-queue statistics and error tracking**
+- **NUMA-aware queue allocation**
 
 **🚧 In Progress:**
 - Packet reception implementation refinements
