@@ -4,41 +4,109 @@ This directory contains the DPDK Poll Mode Driver (PMD) for HPE Cassini (CXI) Ne
 
 ## Overview
 
-The CXI PMD provides high-performance packet processing capabilities for Cassini NICs, leveraging the hardware's unique dual-path architecture:
+The CXI PMD provides high-performance packet processing capabilities for Cassini NICs, leveraging the hardware's unique dual-path architecture and advanced multi-queue RSS capabilities:
 
-- **IDC (Immediate Data Commands)**: For small packets embedded directly in commands
-- **DMA Commands**: For large packets using scatter-gather DMA
+- **IDC (Immediate Data Commands)**: For small packets (≤256 bytes) embedded directly in commands
+- **DMA Commands**: For large packets using scatter-gather DMA with up to 5 segments
+- **RSS (Receive Side Scaling)**: Hardware-accelerated packet distribution across multiple queues
 
 ## Features
 
 - **High Performance**: Optimized for low latency and high throughput
-- **Hardware Offloads**: Checksum calculation and validation
-- **Multi-Queue Support**: Multiple TX/RX queues for parallel processing
+- **Hardware Offloads**: Checksum calculation and validation (TCP, UDP, IP)
+- **Multi-Queue RSS Support**: Up to 64 RX/TX queues with hardware RSS
+- **Advanced RSS**: 2048-entry indirection table with configurable 44-byte hash key
 - **Memory Efficiency**: Efficient buffer management using DPDK mempools
 - **Event-Driven**: Hardware event queues for completion processing
+- **Zero-Copy Design**: Direct hardware access via memory mapping
 
 ## Hardware Architecture
 
 The Cassini NIC consists of several key hardware blocks:
 
-- **CQ (Command Queue)**: Handles command submission
-- **HNI (Host Network Interface)**: Ethernet packet processing
+- **CQ (Command Queue)**: Handles command submission with per-queue isolation
+- **EQ (Event Queue)**: Processes completions with per-queue event handling
+- **HNI (Host Network Interface)**: Ethernet packet processing with RSS support
 - **RMU (Resource Management Unit)**: Memory and resource management
 - **IXE (Initiator eXecution Engine)**: Command execution
 - **ATU (Address Translation Unit)**: Memory mapping
 - **EE (Event Engine)**: Event/completion handling
 
+## Multi-Queue RSS Architecture
+
+### Cassini Hardware RSS Capabilities
+
+The Cassini NIC provides sophisticated RSS hardware support based on the kernel CXI ethernet driver:
+
+- **Maximum RSS Queues**: 64 (must be power of 2)
+- **Maximum TX Queues**: 64 (aligned with RX queues)
+- **Indirection Table**: Up to 2048 entries for fine-grained load balancing
+- **Hash Key Size**: 44 bytes (351 bits rounded up)
+- **Hash Types Supported**:
+  - IPv4/IPv6 with TCP, UDP protocols
+  - IPv4/IPv6 with protocol-specific hashing
+  - IPv6 flow label hashing
+  - RoCE-optimized UDP hashing
+
+### RSS Queue Distribution
+
+When RSS is enabled, incoming packets are distributed across multiple RX queues based on hardware-computed hash values:
+
+```
+Incoming Packet → Hardware RSS Hash → Indirection Table → RX Queue
+     ↓                    ↓                   ↓              ↓
+[Eth|IP|TCP]    →    Hash(src_ip,dst_ip,  →  RETA[hash %  → Queue 0-63
+                          src_port,dst_port)    table_size]
+```
+
+### Multi-Queue Configuration Example
+
+```c
+// Configure 8 RX/TX queues with RSS
+struct rte_eth_conf port_conf = {
+    .rxmode = {
+        .mq_mode = RTE_ETH_MQ_RX_RSS,
+        .max_rx_pkt_len = 9216,
+    },
+    .rx_adv_conf = {
+        .rss_conf = {
+            .rss_key = NULL,  // Use default Cassini hash key
+            .rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP | RTE_ETH_RSS_UDP,
+        },
+    },
+};
+
+// Setup device with 8 queues
+rte_eth_dev_configure(port_id, 8, 8, &port_conf);
+
+// Each queue gets independent CQ/EQ pair
+for (int q = 0; q < 8; q++) {
+    rte_eth_rx_queue_setup(port_id, q, 1024, socket, NULL, mbuf_pool);
+    rte_eth_tx_queue_setup(port_id, q, 1024, socket, NULL);
+}
+```
+
+### Performance Benefits
+
+Multi-queue RSS provides significant performance improvements:
+
+- **Parallel Processing**: Each CPU core handles dedicated queue(s)
+- **Cache Efficiency**: Queue data structures stay in core's cache
+- **Lock-Free Operation**: No synchronization between queues
+- **NUMA Awareness**: Queues allocated on appropriate NUMA nodes
+- **Load Balancing**: Hardware distributes traffic evenly across queues
+
 ## Architecture Documentation
 
 Comprehensive architecture documentation is available in this directory:
 
-- **`CXI_PMD_Architecture.md`** - Detailed architecture documentation with PlantUML diagrams
-- **`cxi_pmd_architecture.puml`** - Raw PlantUML source files for architecture diagrams
+- **`CXI_PMD_Architecture.md`** - Detailed architecture documentation
 
 The documentation includes:
-1. **Complete Call Flow Sequence Diagram** - Function calls from DPDK app through PMD, libcxi, kernel driver, to hardware
-2. **Component Architecture Diagram** - Modular design and component relationships
-3. **Data Flow Diagram** - Packet processing flow and zero-copy design
+1. **Complete Call Flow** - Function calls from DPDK app through PMD, libcxi, kernel driver, to hardware
+2. **Component Architecture** - Modular design and component relationships
+3. **Data Flow** - Packet processing flow and zero-copy design
+4. **Multi-Queue RSS Implementation** - Queue allocation and RSS configuration details
 
 ### Key Architectural Features
 
@@ -105,38 +173,68 @@ dpdk-devbind.py --bind=uio_pci_generic 0000:xx:xx.x
 /* Initialize DPDK EAL */
 rte_eal_init(argc, argv);
 
-/* Configure CXI port */
+/* Configure CXI port with RSS for multi-queue */
 struct rte_eth_conf port_conf = {
     .rxmode = {
-        .mq_mode = RTE_ETH_MQ_RX_NONE,
+        .mq_mode = RTE_ETH_MQ_RX_RSS,  // Enable RSS
+        .max_rx_pkt_len = 9216,
     },
     .txmode = {
         .mq_mode = RTE_ETH_MQ_TX_NONE,
     },
+    .rx_adv_conf = {
+        .rss_conf = {
+            .rss_key = NULL,  // Use Cassini default hash key
+            .rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP | RTE_ETH_RSS_UDP,
+        },
+    },
 };
 
-rte_eth_dev_configure(port_id, nb_rx_queues, nb_tx_queues, &port_conf);
+// Configure with multiple queues for RSS
+rte_eth_dev_configure(port_id, 8, 8, &port_conf);
+
+// Setup each queue
+for (int q = 0; q < 8; q++) {
+    rte_eth_rx_queue_setup(port_id, q, 1024, socket, NULL, mbuf_pool);
+    rte_eth_tx_queue_setup(port_id, q, 1024, socket, NULL);
+}
 ```
 
 ## Performance Tuning
 
-### Queue Configuration
+### Multi-Queue RSS Configuration
 
-- Use multiple queues for parallel processing
-- Size queues appropriately for your workload
-- Consider NUMA topology when assigning queues
+- **Queue Count**: Use power-of-2 queues (2, 4, 8, 16, 32, 64) for optimal RSS
+- **CPU Mapping**: Assign one queue per CPU core for maximum parallelism
+- **NUMA Awareness**: Allocate queues on same NUMA node as processing cores
+- **Hash Types**: Enable appropriate hash types for your traffic patterns
+
+```c
+// Optimal RSS configuration for 8-core system
+struct rte_eth_conf port_conf = {
+    .rxmode = {
+        .mq_mode = RTE_ETH_MQ_RX_RSS,
+    },
+    .rx_adv_conf = {
+        .rss_conf = {
+            .rss_hf = RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6 |
+                      RTE_ETH_RSS_TCP | RTE_ETH_RSS_UDP,
+        },
+    },
+};
+```
 
 ### Packet Size Optimization
 
 - Small packets (≤256 bytes) automatically use IDC path
-- Large packets use DMA path with scatter-gather
-- Driver automatically balances IDC/DMA usage
+- Large packets use DMA path with scatter-gather (up to 5 segments)
+- Driver automatically balances IDC/DMA usage for optimal performance
 
 ### Memory Configuration
 
 - Use hugepages for better performance
-- Configure appropriate mempool sizes
-- Consider NUMA-aware memory allocation
+- Configure appropriate mempool sizes (recommend 8192+ mbufs per queue)
+- Consider NUMA-aware memory allocation for multi-socket systems
 
 ## Debugging
 
@@ -156,36 +254,38 @@ Enable debug logging:
 Current implementation limitations:
 
 - TSO (TCP Segmentation Offload) not yet implemented
-- RSS (Receive Side Scaling) not yet implemented
 - VLAN support not yet implemented
 - SR-IOV support not yet implemented
+- Interrupt mode support not yet implemented
 
 ## Development Status
 
-This implementation provides comprehensive packet transmission functionality:
+This implementation provides comprehensive multi-queue packet processing functionality:
 
 **✅ Completed:**
 - Device probe and initialization via libcxi
-- Queue setup and management (command/event queues)
+- Multi-queue setup and management (up to 64 RX/TX queues)
+- RSS (Receive Side Scaling) with hardware hash support
+- RSS indirection table (RETA) configuration
 - Packet transmission with IDC/DMA path selection
 - Credit-based flow control and backpressure
 - Event-driven completion processing
 - Hardware checksum offload support
 - Memory mapping and zero-copy architecture
-- Comprehensive architecture documentation
+- Per-queue statistics and error tracking
 
 **🚧 In Progress:**
-- Packet reception implementation
+- Packet reception implementation refinements
+- RSS hash key configuration via libcxi
 - Statistics collection improvements
 - Error handling enhancements
-- Performance optimizations
 
 **📋 Planned:**
-- RSS (Receive Side Scaling) support
 - VLAN filtering capabilities
 - TSO (TCP Segmentation Offload)
 - Interrupt mode support
-- Multi-queue optimizations
+- Advanced flow steering
+- SR-IOV support
 
 ## Contributing
 
