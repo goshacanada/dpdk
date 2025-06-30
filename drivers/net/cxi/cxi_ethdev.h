@@ -45,9 +45,9 @@
 #define CXI_CQ_ALIGNMENT     64
 
 /* RSS constants - from CXI hardware definitions */
-#define CXI_ETH_MAX_RSS_QUEUES    CXI_ETH_MAX_RSS_QUEUES
-#define CXI_ETH_MAX_INDIR_ENTRIES CXI_ETH_MAX_INDIR_ENTRIES
-#define CXI_ETH_HASH_KEY_SIZE     CXI_ETH_HASH_KEY_SIZE
+#define CXI_PMD_MAX_RSS_QUEUES    64
+#define CXI_PMD_MAX_INDIR_ENTRIES 2048
+#define CXI_PMD_HASH_KEY_SIZE     44
 
 /* RSS offload types supported by CXI hardware */
 #define CXI_RSS_OFFLOAD_ALL ( \
@@ -81,12 +81,9 @@ struct cxi_adapter;
 struct cxi_rx_queue;
 struct cxi_tx_queue;
 
-/* CXI Memory Descriptor wrapper */
-struct cxi_md {
-    struct cxi_md *md;          /* CXI memory descriptor */
-    void *va;                   /* Virtual address */
-    uint64_t iova;              /* IO virtual address */
-    size_t len;                 /* Length */
+/* CXI Memory Descriptor wrapper - wraps libcxi's struct cxi_md */
+struct cxi_md_wrapper {
+    struct cxi_md *md;          /* Pointer to libcxi memory descriptor */
     bool is_mapped;             /* Mapping status */
 };
 
@@ -105,7 +102,7 @@ struct cxi_cq {
 struct cxi_eq {
     struct cxi_eq *eq;          /* CXI event queue handle */
     void *eq_buf;               /* Event buffer - aligned_alloc'd like cxi_udp_gen.c */
-    struct cxi_md *eq_md;       /* Memory descriptor for EQ buffer */
+    struct cxi_md *eq_md;       /* libcxi memory descriptor for EQ buffer */
     uint32_t size;              /* Queue size */
     uint32_t eqn;               /* Event queue number */
     void (*event_cb)(void *);   /* Event callback */
@@ -196,7 +193,7 @@ struct cxi_adapter {
     struct cxi_cp *cp;          /* Communication Profile - CRITICAL for ethernet */
 
     /* Memory mapping - following cxi_udp_gen.c pattern */
-    struct cxi_md *tx_md;       /* TX memory descriptor for LAC */
+    struct cxi_md *tx_md;       /* libcxi TX memory descriptor for LAC */
     uint32_t phys_lac;          /* Physical LAC for DMA operations */
 
     /* Multi-queue configuration */
@@ -225,7 +222,7 @@ struct cxi_adapter {
     rte_spinlock_t lock;
     
     /* Memory management */
-    struct cxi_md *md_pool;
+    struct cxi_md **md_pool;    /* Array of libcxi memory descriptors */
     uint32_t md_pool_size;
     uint32_t md_pool_used;
     

@@ -21,8 +21,8 @@
 #define CXI_CSUM_TCP           C_CHECKSUM_CTRL_TCP
 #define CXI_CSUM_UDP           C_CHECKSUM_CTRL_UDP
 
-/* Memory address translation macro - following cxi_udp_gen.c pattern */
-#define CXI_VA_TO_IOVA(md, va)  ((md) ? (md)->lac + ((uintptr_t)(va) - (md)->va) : \
+/* Memory address translation macro - matches libcxi standard definition */
+#define CXI_VA_TO_IOVA(md, va)  ((md) ? (md)->iova + ((uintptr_t)(va) - (md)->va) : \
                                  rte_mem_virt2iova(va))
 
 /* RX queue setup */
@@ -485,7 +485,7 @@ cxi_hw_tx_dma(struct cxi_adapter *adapter,
     }
 
     /* Set up DMA ethernet command - following cxi_udp_gen.c pattern */
-    dma_cmd.read_lac = adapter->phys_lac;  /* Critical: LAC for memory access */
+    dma_cmd.read_lac = adapter->tx_md->lac;  /* Critical: LAC from memory descriptor */
     dma_cmd.fmt = C_PKT_FORMAT_STD;
     dma_cmd.flow_hash = txq->queue_id;     /* Use queue ID as flow hash */
     dma_cmd.checksum_ctrl = C_CHECKSUM_CTRL_NONE;
@@ -512,7 +512,7 @@ cxi_hw_tx_dma(struct cxi_adapter *adapter,
 
     /* Build scatter-gather list using mapped IOVA addresses */
     seg = mbuf;
-    while (seg && seg_count < 7) { /* CXI supports up to 7 segments */
+    while (seg && seg_count < 5) { /* CXI supports up to 5 segments (C_MAX_ETH_FRAGS) */
         /* Use CXI_VA_TO_IOVA macro like cxi_udp_gen.c */
         dma_cmd.addr[seg_count] = CXI_VA_TO_IOVA(adapter->tx_md,
                                                 rte_pktmbuf_mtod(seg, void *));

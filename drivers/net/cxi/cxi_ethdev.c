@@ -2,6 +2,7 @@
  * Copyright(c) 2024 Hewlett Packard Enterprise Development LP
  */
 
+#include <rte_ethdev.h>
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
 #include <rte_pci.h>

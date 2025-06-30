@@ -9,7 +9,8 @@
 #include <stdbool.h>
 #include <rte_mbuf.h>
 
-#include "cxi_ethdev.h"
+/* Forward declarations to avoid circular includes */
+struct cxi_adapter;
 
 /* CXI PCI Device IDs */
 #define CXI_VENDOR_ID           0x17DB  /* HPE Vendor ID */
