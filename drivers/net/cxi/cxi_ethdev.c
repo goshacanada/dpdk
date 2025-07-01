@@ -122,8 +122,8 @@ cxi_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
     /* RSS capabilities */
     if (caps.supports_rss) {
-        dev_info->reta_size = CXI_ETH_MAX_INDIR_ENTRIES;
-        dev_info->hash_key_size = CXI_ETH_HASH_KEY_SIZE;
+        dev_info->reta_size = CXI_PMD_MAX_INDIR_ENTRIES;
+        dev_info->hash_key_size = CXI_PMD_HASH_KEY_SIZE;
         dev_info->flow_type_rss_offloads = CXI_RSS_OFFLOAD_ALL;
     }
 
@@ -369,7 +369,7 @@ cxi_rss_hash_update(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf)
     }
 
     /* Update local configuration */
-    if (rss_conf->rss_key && rss_conf->rss_key_len <= CXI_ETH_HASH_KEY_SIZE) {
+    if (rss_conf->rss_key && rss_conf->rss_key_len <= CXI_PMD_HASH_KEY_SIZE) {
         memcpy(adapter->rss_conf.rss_key, rss_conf->rss_key, rss_conf->rss_key_len);
         adapter->rss_conf.rss_key_len = rss_conf->rss_key_len;
     }
@@ -417,9 +417,9 @@ cxi_rss_reta_update(struct rte_eth_dev *dev,
         return -ENOTSUP;
     }
 
-    if (reta_size > CXI_ETH_MAX_INDIR_ENTRIES) {
+    if (reta_size > CXI_PMD_MAX_INDIR_ENTRIES) {
         PMD_DRV_LOG(ERR, "RETA size too large: %u (max: %u)",
-                    reta_size, CXI_ETH_MAX_INDIR_ENTRIES);
+                    reta_size, CXI_PMD_MAX_INDIR_ENTRIES);
         return -EINVAL;
     }
 
@@ -457,9 +457,9 @@ cxi_rss_reta_query(struct rte_eth_dev *dev,
         return -ENOTSUP;
     }
 
-    if (reta_size > CXI_ETH_MAX_INDIR_ENTRIES) {
+    if (reta_size > CXI_PMD_MAX_INDIR_ENTRIES) {
         PMD_DRV_LOG(ERR, "RETA size too large: %u (max: %u)",
-                    reta_size, CXI_ETH_MAX_INDIR_ENTRIES);
+                    reta_size, CXI_PMD_MAX_INDIR_ENTRIES);
         return -EINVAL;
     }
 
