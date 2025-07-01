@@ -1,5 +1,7 @@
 # Please keep these options sorted alphabetically.
 
+option('cxi_headers_path', type: 'string', value: '', description:
+       'Path to CXI hardware headers directory')
 option('check_includes', type: 'boolean', value: false, description:
        'build "chkincs" to verify each header file can compile alone')
 option('cpu_instruction_set', type: 'string', value: 'auto',
