@@ -49,6 +49,11 @@
 #define CXI_PMD_MAX_INDIR_ENTRIES 2048
 #define CXI_PMD_HASH_KEY_SIZE     44
 
+/* CXI service and traffic class constants */
+#define CXI_DEFAULT_SVC_ID        1
+#define CXI_TC_ETH               0
+#define CXI_TC_TYPE_DEFAULT      0
+
 /* RSS offload types supported by CXI hardware */
 #define CXI_RSS_OFFLOAD_ALL ( \
     RTE_ETH_RSS_IPV4 | \
@@ -69,11 +74,11 @@ enum cxi_mq_mode {
 
 /* RSS configuration */
 struct cxi_rss_conf {
-    uint8_t rss_key[CXI_ETH_HASH_KEY_SIZE];
+    uint8_t rss_key[CXI_PMD_HASH_KEY_SIZE];
     uint32_t rss_key_len;
     uint64_t rss_hf;
     uint16_t reta_size;
-    uint16_t reta[CXI_ETH_MAX_INDIR_ENTRIES];
+    uint16_t reta[CXI_PMD_MAX_INDIR_ENTRIES];
 };
 
 /* Forward declarations */
@@ -87,8 +92,8 @@ struct cxi_md_wrapper {
     bool is_mapped;             /* Mapping status */
 };
 
-/* CXI Command Queue wrapper */
-struct cxi_cq {
+/* CXI PMD Command Queue wrapper */
+struct cxi_pmd_cq {
     struct cxi_cq *cq;          /* CXI command queue */
     void *cmds;                 /* Command memory */
     void *csr;                  /* CSR memory */
@@ -98,8 +103,8 @@ struct cxi_cq {
     bool is_tx;                 /* TX or RX queue */
 };
 
-/* CXI Event Queue wrapper - following cxi_udp_gen.c pattern */
-struct cxi_eq {
+/* CXI PMD Event Queue wrapper - following cxi_udp_gen.c pattern */
+struct cxi_pmd_eq {
     struct cxi_eq *eq;          /* CXI event queue handle */
     void *eq_buf;               /* Event buffer - aligned_alloc'd like cxi_udp_gen.c */
     struct cxi_md *eq_md;       /* libcxi memory descriptor for EQ buffer */
@@ -112,8 +117,8 @@ struct cxi_eq {
 /* RX Queue structure */
 struct cxi_rx_queue {
     struct cxi_adapter *adapter;
-    struct cxi_cq cq;           /* Command queue for RX */
-    struct cxi_eq eq;           /* Event queue for RX completions */
+    struct cxi_pmd_cq cq;       /* Command queue for RX */
+    struct cxi_pmd_eq eq;       /* Event queue for RX completions */
     struct rte_mempool *mp;     /* Mempool for RX buffers */
     struct rte_mbuf **rx_bufs;  /* RX buffer array */
     
@@ -137,8 +142,8 @@ struct cxi_rx_queue {
 /* TX Queue structure */
 struct cxi_tx_queue {
     struct cxi_adapter *adapter;
-    struct cxi_cq cq;           /* Command queue for TX */
-    struct cxi_eq eq;           /* Event queue for TX completions */
+    struct cxi_pmd_cq cq;       /* Command queue for TX */
+    struct cxi_pmd_eq eq;       /* Event queue for TX completions */
     struct rte_mbuf **tx_bufs;  /* TX buffer array */
     
     uint16_t queue_id;          /* Queue ID */
@@ -239,12 +244,7 @@ struct cxi_adapter {
 
 /* Function prototypes */
 
-/* Device operations */
-int cxi_dev_configure(struct rte_eth_dev *dev);
-int cxi_dev_start(struct rte_eth_dev *dev);
-int cxi_dev_stop(struct rte_eth_dev *dev);
-int cxi_dev_close(struct rte_eth_dev *dev);
-int cxi_dev_reset(struct rte_eth_dev *dev);
+/* Device operations - these are static functions in cxi_ethdev.c */
 
 /* Queue operations */
 int cxi_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,

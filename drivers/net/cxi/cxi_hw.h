@@ -70,28 +70,16 @@ struct cxi_hw_stats {
     uint64_t rx_bytes;          /* Total RX bytes */
     uint64_t rx_errors;         /* Total RX errors */
     uint64_t rx_dropped;        /* Total RX dropped */
+    uint64_t rx_crc_errors;     /* RX CRC errors */
+    uint64_t rx_length_errors;  /* RX length errors */
+    uint64_t rx_fifo_errors;    /* RX FIFO errors */
+
     uint64_t tx_packets;        /* Total TX packets */
     uint64_t tx_bytes;          /* Total TX bytes */
     uint64_t tx_errors;         /* Total TX errors */
     uint64_t tx_dropped;        /* Total TX dropped */
-};
-
-/* Hardware statistics */
-struct cxi_hw_stats {
-    uint64_t rx_packets;
-    uint64_t rx_bytes;
-    uint64_t rx_errors;
-    uint64_t rx_dropped;
-    uint64_t rx_crc_errors;
-    uint64_t rx_length_errors;
-    uint64_t rx_fifo_errors;
-    
-    uint64_t tx_packets;
-    uint64_t tx_bytes;
-    uint64_t tx_errors;
-    uint64_t tx_dropped;
-    uint64_t tx_fifo_errors;
-    uint64_t tx_carrier_errors;
+    uint64_t tx_fifo_errors;    /* TX FIFO errors */
+    uint64_t tx_carrier_errors; /* TX carrier errors */
 };
 
 /* Function prototypes */
@@ -108,23 +96,23 @@ int cxi_hw_get_capabilities(struct cxi_adapter *adapter,
 
 /* Command queue management - following cxi_udp_gen.c pattern */
 int cxi_hw_cq_alloc(struct cxi_adapter *adapter,
-                    struct cxi_cq *cq, struct cxi_eq *eq, uint32_t size, bool is_tx);
+                    struct cxi_pmd_cq *cq, struct cxi_pmd_eq *eq, uint32_t size, bool is_tx);
 void cxi_hw_cq_free(struct cxi_adapter *adapter,
-                    struct cxi_cq *cq);
+                    struct cxi_pmd_cq *cq);
 int cxi_hw_cq_start(struct cxi_adapter *adapter,
-                    struct cxi_cq *cq);
+                    struct cxi_pmd_cq *cq);
 void cxi_hw_cq_stop(struct cxi_adapter *adapter,
-                    struct cxi_cq *cq);
+                    struct cxi_pmd_cq *cq);
 
 /* Event queue management */
 int cxi_hw_eq_alloc(struct cxi_adapter *adapter,
-                    struct cxi_eq *eq, uint32_t size);
+                    struct cxi_pmd_eq *eq, uint32_t size);
 void cxi_hw_eq_free(struct cxi_adapter *adapter,
-                    struct cxi_eq *eq);
+                    struct cxi_pmd_eq *eq);
 int cxi_hw_eq_start(struct cxi_adapter *adapter,
-                    struct cxi_eq *eq);
+                    struct cxi_pmd_eq *eq);
 void cxi_hw_eq_stop(struct cxi_adapter *adapter,
-                    struct cxi_eq *eq);
+                    struct cxi_pmd_eq *eq);
 
 /* Memory descriptor management */
 int cxi_hw_md_alloc(struct cxi_adapter *adapter,
@@ -211,7 +199,7 @@ static inline void cxi_write_doorbell32(void *doorbell_addr, uint32_t value)
 }
 
 /* Command submission helpers - uses libcxi doorbell interface */
-static inline void cxi_cq_ring_doorbell(struct cxi_cq *cq)
+static inline void cxi_cq_ring_doorbell(struct cxi_pmd_cq *cq)
 {
     if (cq->cq) {
         cxi_cq_ring(cq->cq);
@@ -219,10 +207,11 @@ static inline void cxi_cq_ring_doorbell(struct cxi_cq *cq)
 }
 
 /* Event processing helpers */
-static inline bool cxi_eq_has_events(struct cxi_eq *eq)
+static inline bool cxi_eq_has_events(struct cxi_pmd_eq *eq)
 {
     if (eq->eq) {
-        return cxi_eq_get_event(eq->eq) != NULL;
+        void *event;
+        return cxi_eq_get_event(eq->eq, &event) > 0;
     }
     return false;
 }

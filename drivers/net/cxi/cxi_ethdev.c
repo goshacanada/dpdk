@@ -100,7 +100,9 @@ cxi_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
         dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
 
     /* TX offload capabilities */
-    dev_info->tx_offload_capa = RTE_ETH_TX_OFFLOAD_CHECKSUM;
+    dev_info->tx_offload_capa = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+                                RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+                                RTE_ETH_TX_OFFLOAD_TCP_CKSUM;
     if (caps.supports_tso)
         dev_info->tx_offload_capa |= RTE_ETH_TX_OFFLOAD_TCP_TSO;
     if (caps.supports_vlan)
@@ -137,6 +139,7 @@ cxi_dev_configure(struct rte_eth_dev *dev)
 {
     struct cxi_adapter *adapter = dev->data->dev_private;
     struct rte_eth_conf *conf = &dev->data->dev_conf;
+    int ret;
 
     PMD_DRV_LOG(INFO, "Configuring device with %u RX queues, %u TX queues",
                 dev->data->nb_rx_queues, dev->data->nb_tx_queues);

@@ -122,8 +122,8 @@ cxi_hw_get_capabilities(struct cxi_adapter *adapter,
 
 /* Allocate command queue - following cxi_udp_gen.c pattern exactly */
 int
-cxi_hw_cq_alloc(struct cxi_adapter *adapter, struct cxi_cq *cq,
-                struct cxi_eq *eq, uint32_t size, bool is_tx)
+cxi_hw_cq_alloc(struct cxi_adapter *adapter, struct cxi_pmd_cq *cq,
+                struct cxi_pmd_eq *eq, uint32_t size, bool is_tx)
 {
     struct cxi_cq_alloc_opts cq_opts = {0};
     struct c_cstate_cmd c_state = {0};
@@ -183,7 +183,7 @@ cxi_hw_cq_alloc(struct cxi_adapter *adapter, struct cxi_cq *cq,
 
 /* Free command queue */
 void
-cxi_hw_cq_free(struct cxi_adapter *adapter, struct cxi_cq *cq)
+cxi_hw_cq_free(struct cxi_adapter *adapter, struct cxi_pmd_cq *cq)
 {
     PMD_DRV_LOG(DEBUG, "Freeing command queue");
     
@@ -207,7 +207,7 @@ cxi_hw_cq_free(struct cxi_adapter *adapter, struct cxi_cq *cq)
 
 /* Start command queue */
 int
-cxi_hw_cq_start(struct cxi_adapter *adapter, struct cxi_cq *cq)
+cxi_hw_cq_start(struct cxi_adapter *adapter, struct cxi_pmd_cq *cq)
 {
     PMD_DRV_LOG(DEBUG, "Starting command queue");
     
@@ -223,7 +223,7 @@ cxi_hw_cq_start(struct cxi_adapter *adapter, struct cxi_cq *cq)
 
 /* Stop command queue */
 void
-cxi_hw_cq_stop(struct cxi_adapter *adapter, struct cxi_cq *cq)
+cxi_hw_cq_stop(struct cxi_adapter *adapter, struct cxi_pmd_cq *cq)
 {
     PMD_DRV_LOG(DEBUG, "Stopping command queue");
     
@@ -234,7 +234,7 @@ cxi_hw_cq_stop(struct cxi_adapter *adapter, struct cxi_cq *cq)
 
 /* Allocate event queue - following cxi_udp_gen.c pattern exactly */
 int
-cxi_hw_eq_alloc(struct cxi_adapter *adapter, struct cxi_eq *eq,
+cxi_hw_eq_alloc(struct cxi_adapter *adapter, struct cxi_pmd_eq *eq,
                 uint32_t size)
 {
     struct cxi_eq_attr eq_attrs = {0};
@@ -313,7 +313,7 @@ cxi_hw_eq_alloc(struct cxi_adapter *adapter, struct cxi_eq *eq,
 
 /* Free event queue */
 void
-cxi_hw_eq_free(struct cxi_adapter *adapter, struct cxi_eq *eq)
+cxi_hw_eq_free(struct cxi_adapter *adapter, struct cxi_pmd_eq *eq)
 {
     PMD_DRV_LOG(DEBUG, "Freeing event queue");
     
@@ -334,7 +334,7 @@ cxi_hw_eq_free(struct cxi_adapter *adapter, struct cxi_eq *eq)
 
 /* Start event queue */
 int
-cxi_hw_eq_start(struct cxi_adapter *adapter, struct cxi_eq *eq)
+cxi_hw_eq_start(struct cxi_adapter *adapter, struct cxi_pmd_eq *eq)
 {
     PMD_DRV_LOG(DEBUG, "Starting event queue");
     
@@ -347,7 +347,7 @@ cxi_hw_eq_start(struct cxi_adapter *adapter, struct cxi_eq *eq)
 
 /* Stop event queue */
 void
-cxi_hw_eq_stop(struct cxi_adapter *adapter, struct cxi_eq *eq)
+cxi_hw_eq_stop(struct cxi_adapter *adapter, struct cxi_pmd_eq *eq)
 {
     PMD_DRV_LOG(DEBUG, "Stopping event queue");
     
