@@ -17,9 +17,9 @@
 #include <rte_pci.h>
 
 /* Include CXI hardware definitions */
-#include <cassini_user_defs.h>
-#include <cxi_prov_hw.h>
-#include <libcxi.h>
+#include "include/cassini_user_defs.h"
+#include "include/cxi_prov_hw.h"
+#include "include/libcxi.h"
 
 /* Driver version */
 #define CXI_PMD_VERSION "1.0.0"

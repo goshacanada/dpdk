@@ -7,7 +7,6 @@
 #include <rte_memory.h>
 #include <rte_eal.h>
 #include <rte_cycles.h>
-#include <cxi/cxil.h>
 
 #include "cxi_hw.h"
 #include "cxi_ethdev.h"
