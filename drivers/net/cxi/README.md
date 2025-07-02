@@ -185,39 +185,371 @@ The documentation includes:
 - **Event-Driven Completions**: Asynchronous completion processing via hardware events
 - **libcxi Integration**: Uses libcxi library for resource management and hardware abstraction
 
+## libcxi Integration
+
+The CXI PMD is built on top of the libcxi library, which provides a comprehensive user-space interface to the Cassini hardware. This integration enables high-performance, zero-copy packet processing while maintaining proper resource management and hardware abstraction.
+
+### libcxi Architecture Overview
+
+libcxi serves as the critical abstraction layer between the CXI PMD and the Cassini hardware:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    DPDK Application                         │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ rte_eth_* API calls
+┌─────────────────────▼───────────────────────────────────────┐
+│                    CXI PMD                                  │
+│  ┌─────────────────┬─────────────────┬─────────────────┐    │
+│  │   Device Ops    │   Queue Mgmt    │   Packet I/O    │    │
+│  └─────────────────┴─────────────────┴─────────────────┘    │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ libcxi API calls
+┌─────────────────────▼───────────────────────────────────────┐
+│                   libcxi Library                            │
+│  ┌─────────────────┬─────────────────┬─────────────────┐    │
+│  │ Device Mgmt     │ Resource Alloc  │ Memory Mapping  │    │
+│  │ Command I/F     │ Event Handling  │ Hardware Access │    │
+│  └─────────────────┴─────────────────┴─────────────────┘    │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ ioctl() + mmap()
+┌─────────────────────▼───────────────────────────────────────┐
+│                 CXI Kernel Driver                           │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ Hardware registers
+┌─────────────────────▼───────────────────────────────────────┐
+│                 Cassini Hardware                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Core libcxi Components Used by CXI PMD
+
+#### 1. Device Management
+The CXI PMD uses libcxi for complete device lifecycle management:
+
+**Device Discovery and Initialization:**
+```c
+// Device enumeration and opening
+cxil_open_device(pci_dev->addr.devid, &adapter->cxil_dev);
+
+// Ethernet-specific initialization
+cxil_init_eth_device(adapter->cxil_dev);
+
+// Capability discovery
+cxil_get_eth_capabilities(adapter->cxil_dev, &eth_caps);
+```
+
+**Resource Allocation Pattern:**
+```c
+// Logical Network Interface (LNI) - Core communication context
+cxil_alloc_lni(adapter->cxil_dev, &adapter->lni, CXI_DEFAULT_SVC_ID);
+
+// Communication Profile (CP) - Ethernet traffic class configuration
+cxil_alloc_cp(adapter->lni, 0, CXI_TC_ETH, CXI_TC_TYPE_DEFAULT, &adapter->cp);
+```
+
+#### 2. Memory Management and Zero-Copy Architecture
+libcxi provides sophisticated memory management that enables zero-copy packet processing:
+
+**Memory Mapping for Hardware Access:**
+```c
+// Map packet buffers for DMA access
+cxil_map(adapter->lni, buffer_va, buffer_len,
+         CXI_MAP_PIN | CXI_MAP_READ | CXI_MAP_WRITE,
+         NULL, &memory_descriptor);
+
+// Direct hardware access via mapped memory
+// - Command Queues: Direct write access for packet commands
+// - Event Queues: Direct read access for completion events
+// - CSRs: Direct access for configuration and status
+```
+
+**Benefits of libcxi Memory Management:**
+- **Zero-Copy Design**: Packets are never copied between user and kernel space
+- **Hardware DMA**: Direct memory access by Cassini hardware
+- **IOMMU Integration**: Proper address translation for virtualized environments
+- **Memory Pinning**: Prevents page swapping for consistent performance
+
+#### 3. Command and Event Queue Management
+libcxi manages the hardware command/event queue infrastructure that enables high-performance packet processing:
+
+**Command Queue (CQ) Allocation:**
+```c
+// Allocate command queue for packet transmission
+cxil_alloc_cmdq(adapter->lni, event_queue, &cq_options, &command_queue);
+
+// Configure queue for ethernet traffic
+struct cxi_cq_alloc_opts cq_opts = {
+    .count = CXI_DEFAULT_CQ_SIZE,
+    .flags = CXI_CQ_IS_TX,
+    .policy = CXI_CQ_UPDATE_HIGH_FREQ,
+};
+```
+
+**Event Queue (EQ) Management:**
+```c
+// Allocate event queue for completion processing
+cxil_alloc_evtq(adapter->lni, eq_memory_descriptor, &eq_attrs,
+                NULL, NULL, &event_queue);
+
+// Event queue provides asynchronous completion notifications
+// - TX completions for credit management
+// - RX notifications for packet arrival
+// - Error events for exception handling
+```
+
+#### 4. Packet Transmission via libcxi
+The CXI PMD leverages libcxi's dual-path transmission architecture:
+
+**IDC (Immediate Data Commands) for Small Packets:**
+```c
+// Small packets (≤256 bytes) embedded directly in commands
+ret = cxi_cq_emit_idc_eth(txq->cq.cq, &idc_cmd,
+                         packet_data, packet_length);
+```
+
+**DMA Commands for Large Packets:**
+```c
+// Large packets use scatter-gather DMA
+ret = cxi_cq_emit_dma_eth(txq->cq.cq, &dma_cmd);
+```
+
+**Hardware Doorbell Mechanism:**
+```c
+// Ring doorbell to notify hardware of new commands
+cxi_cq_ring(command_queue);
+// This triggers MMIO write to hardware doorbell register
+```
+
+#### 5. Network Configuration via libcxi
+libcxi provides comprehensive network configuration capabilities:
+
+**MAC Address Management:**
+```c
+// Get hardware MAC address
+cxil_get_mac_address(adapter->cxil_dev, mac_addr_bytes);
+
+// Set new MAC address
+cxil_set_mac_address(adapter->cxil_dev, new_mac_addr);
+```
+
+**Link and MTU Configuration:**
+```c
+// Query link status and capabilities
+cxil_get_link_info(adapter->cxil_dev, &link_info);
+
+// Configure Maximum Transmission Unit
+cxil_set_mtu(adapter->cxil_dev, new_mtu_size);
+```
+
+**Traffic Filtering:**
+```c
+// Configure promiscuous mode
+cxil_set_promiscuous(adapter->cxil_dev, enable);
+
+// Configure multicast filtering
+cxil_set_allmulticast(adapter->cxil_dev, enable);
+```
+
+### Performance Benefits of libcxi Integration
+
+#### 1. Zero-Copy Data Path
+- **No Memory Copies**: Packets flow directly from application buffers to hardware
+- **Reduced CPU Overhead**: Eliminates expensive memory copy operations
+- **Cache Efficiency**: Minimizes cache pollution from unnecessary data movement
+
+#### 2. Direct Hardware Access
+- **Memory Mapped I/O**: Command and event queues accessed via mmap()
+- **User-Space Operations**: No system calls in fast path
+- **Hardware Doorbells**: Direct MMIO writes for command submission
+
+#### 3. Efficient Resource Management
+- **Hardware Resource Pooling**: libcxi manages hardware resource allocation
+- **Multi-Queue Isolation**: Independent command/event queues per TX/RX queue
+- **Credit-Based Flow Control**: Prevents hardware queue overflow
+
+#### 4. Advanced Hardware Features
+- **RSS (Receive Side Scaling)**: Hardware-accelerated packet distribution
+- **Checksum Offload**: Hardware calculation of TCP/UDP/IP checksums
+- **Scatter-Gather DMA**: Efficient handling of fragmented packets
+
+### libcxi API Categories Used by CXI PMD
+
+| Category | Functions | Purpose |
+|----------|-----------|---------|
+| **Device Management** | `cxil_open_device()`, `cxil_close_device()`, `cxil_init_eth_device()` | Device lifecycle and initialization |
+| **Resource Allocation** | `cxil_alloc_lni()`, `cxil_alloc_cp()`, `cxil_destroy_*()` | Communication context setup |
+| **Queue Management** | `cxil_alloc_cmdq()`, `cxil_alloc_evtq()`, `cxi_cq_emit_*()` | Command/event queue operations |
+| **Memory Management** | `cxil_map()`, `cxil_unmap()` | Zero-copy memory mapping |
+| **Network Configuration** | `cxil_get_mac_address()`, `cxil_set_mtu()`, `cxil_get_link_info()` | Network interface configuration |
+| **Hardware Capabilities** | `cxil_get_eth_capabilities()` | Feature discovery and validation |
+
+### Error Handling and Resource Cleanup
+
+The CXI PMD implements robust error handling following libcxi best practices:
+
+```c
+// Proper resource cleanup order (reverse of allocation)
+if (adapter->cp) {
+    cxil_destroy_cp(adapter->cp);
+    adapter->cp = NULL;
+}
+if (adapter->lni) {
+    cxil_destroy_lni(adapter->lni);
+    adapter->lni = NULL;
+}
+if (adapter->cxil_dev) {
+    cxil_close_device(adapter->cxil_dev);
+    adapter->cxil_dev = NULL;
+}
+```
+
 ## Dependencies
 
 ### Required Libraries
 
 The driver requires libcxi library and CXI hardware definition headers:
-- `libcxi` - CXI user-space library for resource management
-- `cassini_user_defs.h` - Core hardware definitions
-- `cxi_prov_hw.h` - User-level control interface
-- `libcassini.h` - Hardware control interface
+- `libcxi` - CXI user-space library for resource management and hardware abstraction
+- `cassini_user_defs.h` - Core hardware definitions and command structures
+- `cxi_prov_hw.h` - Hardware provider interface for command/event operations
+- `libcassini.h` - Hardware control interface definitions
 
-### Build Configuration
+### Build Configuration and libcxi Integration
 
-Configure the build with CXI headers path:
+The CXI PMD build system is designed to work with both development and production environments:
 
-```bash
-meson setup build -Dcxi_headers_path=/path/to/cxi/headers
-```
-
-Or set the path in your environment:
+#### Development Build (Headers Only)
+For development and testing, the PMD includes essential libcxi headers locally:
 
 ```bash
-export CXI_HEADERS_PATH=/path/to/cxi/headers
+# The build system automatically detects local headers
+meson setup build
+ninja -C build
+
+# Local headers are included from drivers/net/cxi/include/:
+# - libcxi.h (main API definitions)
+# - cxi_prov_hw.h (hardware provider interface)
+# - cassini_user_defs.h (hardware constants and structures)
 ```
+
+#### Production Build (Full libcxi Library)
+For production deployment, install the complete libcxi library:
+
+```bash
+# Install libcxi development package (example for RPM-based systems)
+sudo dnf install libcxi-devel
+
+# Or build from source
+git clone https://github.com/HewlettPackard/shs-libcxi.git
+cd shs-libcxi
+./autogen.sh
+./configure --prefix=/usr/local
+make && sudo make install
+
+# Configure DPDK build with libcxi
+meson setup build
+ninja -C build
+```
+
+#### Build System libcxi Detection
+The meson build system automatically handles libcxi integration:
+
+```meson
+# From drivers/net/cxi/meson.build
+libcxi_dep = dependency('libcxi', required: false)
+if not libcxi_dep.found()
+    # Try to find libcxi in standard locations
+    libcxi_dep = cc.find_library('cxi', required: false)
+    if not libcxi_dep.found()
+        # Build with headers only (development mode)
+        message('Warning: libcxi library not found, building with headers only')
+        message('Note: Runtime will require libcxi to be installed separately')
+    endif
+endif
+```
+
+#### Runtime Requirements
+- **Development/Testing**: Only headers needed for compilation
+- **Production**: Full libcxi library must be installed on target system
+- **Hardware**: Cassini NIC with appropriate kernel drivers
 
 ## Building
 
-1. Ensure DPDK is properly configured
-2. Set the CXI headers path (see above)
-3. Build DPDK with CXI PMD enabled:
-
+### Quick Start
 ```bash
+# Clone DPDK (if not already available)
+git clone https://github.com/DPDK/dpdk.git
+cd dpdk
+
+# Configure and build with CXI PMD
 meson setup build
 ninja -C build
+```
+
+### Detailed Build Process
+
+1. **Verify Prerequisites**
+   ```bash
+   # Check for required tools
+   which meson ninja pkg-config
+
+   # Verify Python version (3.6+ required)
+   python3 --version
+   ```
+
+2. **Configure Build Environment**
+   ```bash
+   # Set up build directory
+   meson setup build
+
+   # Optional: Enable debug for CXI PMD development
+   meson setup build -Dbuildtype=debug
+
+   # Optional: Build only CXI PMD and dependencies
+   meson setup build -Ddisable_drivers=* -Denable_drivers=net/cxi
+   ```
+
+3. **Build DPDK with CXI PMD**
+   ```bash
+   # Build all components
+   ninja -C build
+
+   # Or build only CXI PMD
+   ninja -C build drivers/librte_net_cxi.so
+   ```
+
+4. **Verify Build Success**
+   ```bash
+   # Check if CXI PMD was built
+   ls -la build/drivers/librte_net_cxi.*
+
+   # Verify PMD registration
+   build/app/dpdk-testpmd --help | grep -i cxi
+   ```
+
+### Build Troubleshooting
+
+**Missing libcxi Headers:**
+```bash
+# Error: Required CXI headers not found
+# Solution: Ensure headers are present in drivers/net/cxi/include/
+ls drivers/net/cxi/include/libcxi.h
+```
+
+**libcxi Library Not Found (Runtime):**
+```bash
+# Error: libcxi.so not found when running applications
+# Solution: Install libcxi or set LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+```
+
+**Compilation Errors:**
+```bash
+# Enable verbose build for debugging
+ninja -C build -v
+
+# Check meson configuration
+meson configure build | grep cxi
 ```
 
 ## Usage
