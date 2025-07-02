@@ -10,12 +10,16 @@
 
 #include <stdint.h>
 
+/* For DPDK build, we don't have asm/byteorder.h, so we'll use endian.h */
+#ifndef __KERNEL__
+#include <endian.h>
+#endif
+
 #ifndef __LITTLE_ENDIAN
 #error "Non-little endian builds not supported"
 #endif
 
 #ifndef __KERNEL__
-#include <endian.h>
 #define be64_to_cpu be64toh
 #define be32_to_cpu be32toh
 #define be16_to_cpu be16toh
@@ -249,5 +253,112 @@ struct c_dma_eth_cmd {
     uint16_t eq : 11;
     uint8_t : 5;
 } __attribute__((packed));
+
+/* Essential structures from official cassini_user_defs.h */
+
+/* EQ software state union */
+union c_ee_cfg_eq_sw_state {
+    uint64_t qw;
+    struct {
+        uint64_t rd_ptr              : 26;
+        uint64_t                     :  5;
+        uint64_t reading_buffer_b    :  1;
+        uint64_t event_int_disable   :  1;
+        uint64_t eq_sts_int_disable  :  1;
+        uint64_t                     :  6;
+        uint64_t event_drop_seq_no   :  1;
+        uint64_t                     :  3;
+        uint64_t                     :  4;
+        uint64_t                     : 16;
+    };
+};
+
+/* EQ status structure */
+struct c_eq_status {
+    uint32_t timestamp_ns_cpy     : 30;
+    uint64_t                      : 34;
+    uint64_t timestamp_sec_cpy    : 48;
+    uint8_t thld_sts              :  1;
+    uint8_t                       :  3;
+    uint8_t thld_id               :  2;
+    uint8_t                       :  2;
+    uint8_t unackd_dropped_event  :  1;
+    uint8_t                       :  3;
+    uint8_t event_drop_seq_no     :  1;
+    uint8_t                       :  3;
+    uint32_t event_slots_free     : 26;
+    uint8_t                       :  6;
+    uint32_t event_slots_rsrvd    : 26;
+    uint8_t                       :  6;
+    uint32_t wr_ptr               : 26;
+    uint8_t                       :  6;
+    uint8_t using_buffer_b        :  1;
+    uint32_t                      : 31;
+    uint64_t unused_0;
+    uint64_t unused_1;
+    uint32_t unused_2;
+    uint32_t timestamp_ns         : 30;
+    uint8_t                       :  2;
+    uint64_t timestamp_sec        : 48;
+    uint16_t unused_3;
+};
+
+/* CQ status structure */
+struct c_cq_status {
+    uint16_t rd_ptr;
+    uint16_t num_write_cmds_rejected;
+    uint8_t fail_command;
+    uint8_t unused_0;
+    uint8_t return_code                :  6;
+    uint16_t                           :  7;
+    uint8_t fail_loc_32                :  1;
+    uint8_t fail_ll                    :  1;
+    uint8_t ll_disabled                :  1;
+};
+
+/* Event structures - minimal definitions */
+struct c_event_cmd_fail {
+    uint8_t event_size;
+    uint8_t event_type;
+    /* Additional fields would go here */
+};
+
+/* Event structures with essential fields */
+struct c_event_initiator_short {
+    uint8_t event_size;
+    uint8_t event_type;
+    uint16_t return_code;
+    uint32_t reserved;
+    uint64_t user_ptr;
+};
+
+struct c_event_initiator_long {
+    uint8_t event_size;
+    uint8_t event_type;
+    uint16_t return_code;
+    uint32_t reserved;
+    uint64_t user_ptr;
+    uint64_t mlength;
+};
+
+struct c_event_trig_op_short { uint8_t placeholder; };
+struct c_event_trig_op_long { uint8_t placeholder; };
+struct c_event_target_long { uint8_t placeholder; };
+struct c_event_target_short { uint8_t placeholder; };
+struct c_event_target_enet { uint8_t placeholder; };
+struct c_event_enet_fgfc { uint8_t placeholder; };
+struct c_event_timestamp { uint8_t placeholder; };
+struct c_event_eq_switch { uint8_t placeholder; };
+struct c_event_pct { uint8_t placeholder; };
+
+/* Event size constants */
+#define C_EVENT_SIZE_NO_EVENT 0
+#define C_EVENT_SIZE_16_BYTE  1
+
+/* Event type constants */
+#define C_EVENT_SEND          1
+
+/* Return code constants */
+#define C_RC_OK               0
 
 #endif /* __CASSINI_USER_DEFS_H */

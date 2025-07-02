@@ -6,6 +6,7 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
+#include <ethdev_driver.h>
 #include <rte_prefetch.h>
 #include <rte_atomic.h>
 #include <rte_udp.h>
@@ -17,10 +18,7 @@
 /* Additional checksum constants not in cxi_hw.h */
 #define CXI_CSUM_IP            1
 
-/* Event constants */
-#define C_EVENT_SIZE_16_BYTE   0
-#define C_EVENT_SEND           1
-#define C_RC_OK                0
+/* Event constants - defined in cassini_user_defs.h */
 
 /* Simplified event structures for compilation */
 struct c_event_hdr {
@@ -36,14 +34,10 @@ struct c_init_short_event {
     uint64_t reserved;
 };
 
-union c_event {
-    struct c_event_hdr hdr;
-    struct c_init_short_event init_short;
-};
+/* union c_event is defined in cxi_prov_hw.h */
 
-/* Memory address translation macro - matches libcxi standard definition */
-#define CXI_VA_TO_IOVA(md, va)  ((md) ? (md)->iova + ((uintptr_t)(va) - (md)->va) : \
-                                 rte_mem_virt2iova(va))
+/* Memory address translation macro - use DPDK memory translation */
+#define CXI_VA_TO_IOVA(md, va)  rte_mem_virt2iova(va)
 
 /* RX queue setup */
 int
@@ -423,7 +417,7 @@ cxi_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 /* Hardware-specific TX IDC implementation */
 int
-cxi_hw_tx_idc(struct cxi_adapter *adapter,
+cxi_hw_tx_idc(struct cxi_adapter *adapter __rte_unused,
               struct cxi_tx_queue *txq,
               struct rte_mbuf *mbuf)
 {
@@ -532,9 +526,9 @@ cxi_hw_tx_dma(struct cxi_adapter *adapter,
     /* Build scatter-gather list using mapped IOVA addresses */
     seg = mbuf;
     while (seg && seg_count < 5) { /* CXI supports up to 5 segments (C_MAX_ETH_FRAGS) */
-        /* Use CXI_VA_TO_IOVA macro like cxi_udp_gen.c */
-        dma_cmd.addr[seg_count] = CXI_VA_TO_IOVA(adapter->tx_md,
-                                                rte_pktmbuf_mtod(seg, void *));
+        /* Get packet data pointer and convert to IOVA */
+        void *data_ptr = (void *)((char *)seg->buf_addr + seg->data_off);
+        dma_cmd.addr[seg_count] = CXI_VA_TO_IOVA(adapter->tx_md, data_ptr);
         dma_cmd.len[seg_count] = seg->data_len;
         seg_count++;
         seg = seg->next;
@@ -568,20 +562,20 @@ cxi_hw_tx_dma(struct cxi_adapter *adapter,
 
 /* Process TX completion events - following cxi_udp_gen.c pattern */
 uint16_t
-cxi_hw_tx_process_events(struct cxi_adapter *adapter,
+cxi_hw_tx_process_events(struct cxi_adapter *adapter __rte_unused,
                          struct cxi_tx_queue *txq)
 {
-    union c_event event;
     uint16_t completed = 0;
     int event_count = 0;
-    int ret;
 
     if (!txq->eq.eq) {
         return 0;
     }
 
     /* Process completion events */
-    while ((ret = cxi_eq_get_event(txq->eq.eq, &event)) > 0) {
+    const union c_event *event_ptr;
+    while ((event_ptr = cxi_eq_get_event(txq->eq.eq)) != NULL) {
+        union c_event event = *event_ptr;
         struct rte_mbuf *mbuf;
 
         /* Validate event */

@@ -2,11 +2,17 @@
  * Copyright(c) 2024 Hewlett Packard Enterprise Development LP
  */
 
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
 #include <rte_malloc.h>
 #include <rte_memzone.h>
 #include <rte_memory.h>
 #include <rte_eal.h>
 #include <rte_cycles.h>
+#include <rte_io.h>
+#include <rte_pci.h>
 
 #include "cxi_hw.h"
 #include "cxi_ethdev.h"
@@ -321,13 +327,13 @@ cxi_hw_eq_free(struct cxi_adapter *adapter, struct cxi_pmd_eq *eq)
         eq->eq = NULL;
     }
     
-    if (eq->eq_md.is_mapped) {
-        cxi_hw_md_free(adapter, &eq->eq_md);
+    if (eq->eq_md && eq->eq_md->is_mapped) {
+        cxi_hw_md_free(adapter, eq->eq_md);
     }
-    
-    if (eq->events) {
-        rte_free(eq->events);
-        eq->events = NULL;
+
+    if (eq->eq_md) {
+        rte_free(eq->eq_md);
+        eq->eq_md = NULL;
     }
 }
 
@@ -375,17 +381,19 @@ cxi_hw_md_alloc(struct cxi_adapter *adapter, struct cxi_md *md,
 
     if (adapter->lni) {
         /* Use libcxi for mapping */
+        struct cxi_md *libcxi_md = NULL;
         ret = cxil_map(adapter->lni, va, len,
                       CXI_MAP_PIN | CXI_MAP_READ | CXI_MAP_WRITE,
-                      NULL, &md->md);
+                      NULL, &libcxi_md);
         if (ret) {
             PMD_DRV_LOG(ERR, "Failed to map memory: %d", ret);
             return ret;
         }
 
         md->va = va;
-        md->iova = md->md->iova;
+        md->iova = libcxi_md->iova;
         md->len = len;
+        md->md = libcxi_md;
         md->is_mapped = true;
     } else {
         /* Fallback for testing */

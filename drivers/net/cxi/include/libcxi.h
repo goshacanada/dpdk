@@ -7,6 +7,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
+#include <errno.h>
+#include <assert.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -132,6 +134,19 @@ CXIL_API int cxil_destroy_cmdq(struct cxi_cq *cmdq);
 CXIL_API int cxil_map(struct cxil_lni *lni, void *va, size_t len, uint32_t flags, struct cxi_md_hints *hints, struct cxi_md **md);
 CXIL_API int cxil_unmap(struct cxi_md *md);
 CXIL_API int cxil_alloc_evtq(struct cxil_lni *lni, const struct cxi_md *md, const struct cxi_eq_attr *attr, struct cxil_wait_obj *event_wait, struct cxil_wait_obj *status_wait, struct cxi_eq **evtq);
+
+/* Ethernet-specific functions */
+CXIL_API int cxil_init_eth_device(struct cxil_dev *dev);
+CXIL_API int cxil_get_eth_capabilities(struct cxil_dev *dev, struct cxi_eth_caps *caps);
+CXIL_API int cxil_get_mac_address(struct cxil_dev *dev, uint8_t *mac_addr);
+CXIL_API int cxil_set_mac_address(struct cxil_dev *dev, const uint8_t *mac_addr);
+CXIL_API int cxil_get_link_info(struct cxil_dev *dev, struct cxi_link_info *link_info);
+CXIL_API int cxil_set_promiscuous(struct cxil_dev *dev, bool enable);
+CXIL_API int cxil_set_allmulticast(struct cxil_dev *dev, bool enable);
+CXIL_API int cxil_set_mtu(struct cxil_dev *dev, uint32_t mtu);
+
+/* Command queue functions */
+CXIL_API int cxi_cq_emit_c_state(struct cxi_cq *cq, const struct c_cstate_cmd *cmd);
 CXIL_API int cxil_destroy_evtq(struct cxi_eq *evtq);
 
 #ifdef __cplusplus

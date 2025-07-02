@@ -32,9 +32,7 @@
 #define CXI_MAX_PKT_SIZE     9216
 #define CXI_MIN_PKT_SIZE     64
 
-/* Hardware constants from CXI definitions */
-#define CXI_MAX_CQS          C_NUM_TRANSMIT_CQS
-#define CXI_MAX_EQS          C_NUM_EQS
+/* Hardware constants from CXI definitions - avoid conflicts with cxi_prov_hw.h */
 #define CXI_MAX_MDS          1024
 
 /* IDC vs DMA threshold */

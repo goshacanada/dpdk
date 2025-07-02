@@ -8,9 +8,25 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <rte_mbuf.h>
+#include <rte_ethdev.h>
+#include <rte_pci.h>
+#include <rte_io.h>
+#include <rte_dev.h>
+#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 
 /* Forward declarations to avoid circular includes */
 struct cxi_adapter;
+struct cxi_pmd_cq;
+struct cxi_pmd_eq;
+struct cxi_md;
+struct cxi_tx_queue;
+struct cxi_rx_queue;
+
+/* Include the main ethdev header for complete structure definitions */
+#ifndef _CXI_ETHDEV_H_
+struct cxi_hw_info;
+#endif
 
 /* CXI PCI Device IDs */
 #define CXI_VENDOR_ID           0x17DB  /* HPE Vendor ID */
@@ -22,14 +38,10 @@ struct cxi_adapter;
  * Only doorbell access is allowed for performance-critical paths.
  */
 
-/* Command queue configuration */
-#define CXI_CQ_SIZE_MIN         64
-#define CXI_CQ_SIZE_MAX         4096
+/* Command queue configuration - use values from cxi_prov_hw.h to avoid conflicts */
 #define CXI_CQ_SIZE_DEFAULT     1024
 
-/* Event queue configuration */
-#define CXI_EQ_SIZE_MIN         64
-#define CXI_EQ_SIZE_MAX         4096
+/* Event queue configuration - use values from cxi_prov_hw.h to avoid conflicts */
 #define CXI_EQ_SIZE_DEFAULT     1024
 
 /* Memory descriptor limits */
@@ -176,16 +188,9 @@ int cxi_hw_rss_reta_query(struct cxi_adapter *adapter,
                           struct rte_eth_rss_reta_entry64 *reta_conf,
                           uint16_t reta_size);
 
-/* Utility functions */
-static inline bool cxi_is_cassini_2(struct cxi_adapter *adapter)
-{
-    return adapter->hw_info.is_cassini_2;
-}
-
-static inline uint32_t cxi_get_platform_type(struct cxi_adapter *adapter)
-{
-    return adapter->hw_info.platform_type;
-}
+/* Utility functions - declared in cxi_ethdev.h where structures are complete */
+bool cxi_is_cassini_2(struct cxi_adapter *adapter);
+uint32_t cxi_get_platform_type(struct cxi_adapter *adapter);
 
 /* Hardware doorbell access helpers - only allowed direct hardware access */
 static inline void cxi_write_doorbell(void *doorbell_addr, uint64_t value)
@@ -198,22 +203,10 @@ static inline void cxi_write_doorbell32(void *doorbell_addr, uint32_t value)
     rte_write32(value, (volatile void *)doorbell_addr);
 }
 
-/* Command submission helpers - uses libcxi doorbell interface */
-static inline void cxi_cq_ring_doorbell(struct cxi_pmd_cq *cq)
-{
-    if (cq->cq) {
-        cxi_cq_ring(cq->cq);
-    }
-}
+/* Command submission helpers - declared in cxi_ethdev.h where structures are complete */
+void cxi_cq_ring_doorbell(struct cxi_pmd_cq *cq);
 
-/* Event processing helpers */
-static inline bool cxi_eq_has_events(struct cxi_pmd_eq *eq)
-{
-    if (eq->eq) {
-        void *event;
-        return cxi_eq_get_event(eq->eq, &event) > 0;
-    }
-    return false;
-}
+/* Event processing helpers - declared in cxi_ethdev.h where structures are complete */
+bool cxi_eq_has_events(struct cxi_pmd_eq *eq);
 
 #endif /* _CXI_HW_H_ */
