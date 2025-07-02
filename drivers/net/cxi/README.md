@@ -670,10 +670,10 @@ Enable debug logging:
 
 Current implementation limitations:
 
-- TSO (TCP Segmentation Offload) not yet implemented
-- VLAN support not yet implemented
-- SR-IOV support not yet implemented
-- Interrupt mode support not yet implemented
+- TSO (TCP Segmentation Offload) not implemented
+- VLAN support not implemented
+- SR-IOV support not implemented
+- Interrupt mode support not implemented
 
 ## Development Status
 
@@ -693,19 +693,6 @@ This implementation provides comprehensive multi-queue packet processing functio
 - Memory mapping and zero-copy architecture
 - **Per-queue statistics and error tracking**
 - **NUMA-aware queue allocation**
-
-**🚧 In Progress:**
-- Packet reception implementation refinements
-- RSS hash key configuration via libcxi
-- Statistics collection improvements
-- Error handling enhancements
-
-**📋 Planned:**
-- VLAN filtering capabilities
-- TSO (TCP Segmentation Offload)
-- Interrupt mode support
-- Advanced flow steering
-- SR-IOV support
 
 ## Contributing
 
