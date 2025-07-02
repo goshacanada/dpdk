@@ -26,9 +26,10 @@ The Cassini NIC consists of several key hardware blocks:
 
 - **CQ (Command Queue)**: Handles command submission with per-queue isolation
 - **EQ (Event Queue)**: Processes completions with per-queue event handling
-- **HNI (Host Network Interface)**: Ethernet packet processing with RSS support
-- **RMU (Resource Management Unit)**: Memory and resource management
-- **IXE (Initiator eXecution Engine)**: Command execution
+- **HNI (Host Network Interface)**: Ethernet packet processing 
+- **RMU (Resource Management Unit)**: RSS and resource management
+- **IXE (Initiator eXecution Engine)**: Inbound packet processing
+- **OXE (Outbound eXecution Engine)**: Outbound packet processing
 - **ATU (Address Translation Unit)**: Memory mapping
 - **EE (Event Engine)**: Event/completion handling
 
@@ -167,7 +168,7 @@ static int worker_thread(void *arg) {
 
 ## Architecture Documentation
 
-Comprehensive architecture documentation is available in this directory:
+Architecture documentation is available in this directory:
 
 - **`CXI_PMD_Architecture.md`** - Detailed architecture documentation
 
